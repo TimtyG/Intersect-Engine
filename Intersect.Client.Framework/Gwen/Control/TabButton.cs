@@ -36,7 +36,7 @@ public partial class TabButton : Button
     /// <summary>
     ///     Indicates whether the tab is active.
     /// </summary>
-    public bool IsTabActive => _page is { IsVisible: true };
+    public bool IsTabActive => _page is { IsVisibleInTree: true };
 
     // todo: remove public access
     public TabControl? TabControl
@@ -132,7 +132,7 @@ public partial class TabButton : Button
         if (down)
         {
             var count = Parent.Children.Count;
-            var me = Parent.Children.IndexOf(this);
+            var me = Parent.IndexOf(this);
             if (me + 1 < count)
             {
                 var nextTab = Parent.Children[me + 1];
@@ -156,7 +156,7 @@ public partial class TabButton : Button
         if (down)
         {
             var count = Parent.Children.Count;
-            var me = Parent.Children.IndexOf(this);
+            var me = Parent.IndexOf(this);
             if (me - 1 >= 0)
             {
                 var prevTab = Parent.Children[me - 1];

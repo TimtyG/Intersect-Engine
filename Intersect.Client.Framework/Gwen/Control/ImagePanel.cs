@@ -25,7 +25,7 @@ public partial class ImagePanel : Base
 
     protected string mRightMouseClickSound;
 
-    private GameTexture? _texture { get; set; }
+    private IGameTexture? _texture { get; set; }
     private string? _textureName;
     private Rectangle _textureSourceBounds;
     private float _textureAspectRatio;
@@ -70,7 +70,7 @@ public partial class ImagePanel : Base
     /// <summary>
     ///     Assign Existing Texture
     /// </summary>
-    public GameTexture? Texture
+    public IGameTexture? Texture
     {
         get => _texture;
         set
@@ -166,12 +166,9 @@ public partial class ImagePanel : Base
         base.OnPositionChanged(oldPosition, newPosition);
     }
 
-    /// <summary>
-    ///     Performs application-defined tasks associated with freeing, releasing, or resetting unmanaged resources.
-    /// </summary>
-    public override void Dispose()
+    protected override void Dispose(bool disposing)
     {
-        base.Dispose();
+        base.Dispose(disposing);
     }
 
     public override JObject? GetJson(bool isRoot = false, bool onlySerializeIfNotEmpty = false)
@@ -312,9 +309,9 @@ public partial class ImagePanel : Base
         EnsureTextureLoaded();
     }
 
-    protected override void Prelayout(Skin.Base skin)
+    protected override void DoPrelayout(Skin.Base skin)
     {
-        base.Prelayout(skin);
+        base.DoPrelayout(skin);
 
         EnsureTextureLoaded();
     }
@@ -402,11 +399,6 @@ public partial class ImagePanel : Base
     ///     Sizes the control to its contents.
     /// </summary>
     public virtual void SizeToContents() => SizeToChildren();
-
-    public override bool SizeToChildren(bool resizeX = true, bool resizeY = true, bool recursive = false)
-    {
-        return base.SizeToChildren(resizeX, resizeY, recursive);
-    }
 
     public override bool SetBounds(int x, int y, int width, int height)
     {

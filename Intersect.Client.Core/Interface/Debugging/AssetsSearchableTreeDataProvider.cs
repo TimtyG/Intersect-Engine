@@ -11,7 +11,7 @@ using Microsoft.Extensions.Logging;
 
 namespace Intersect.Client.Interface.Debugging;
 
-public sealed class TexturesSearchableTreeDataProvider : ISearchableTreeDataProvider
+public sealed class AssetsSearchableTreeDataProvider : ISearchableTreeDataProvider
 {
     private readonly GameContentManager _contentManager;
     private readonly Dictionary<string, SearchableTreeDataEntry> _entries;
@@ -19,7 +19,7 @@ public sealed class TexturesSearchableTreeDataProvider : ISearchableTreeDataProv
     private readonly Dictionary<string, Dictionary<string, SearchableTreeDataEntry>> _entriesByParent;
     private readonly Base _parent;
 
-    public TexturesSearchableTreeDataProvider(GameContentManager contentManager, Base parent)
+    public AssetsSearchableTreeDataProvider(GameContentManager contentManager, Base parent)
     {
         _contentManager = contentManager;
         _parent = parent;
@@ -152,7 +152,7 @@ public sealed class TexturesSearchableTreeDataProvider : ISearchableTreeDataProv
         var assetName = asset.Name ?? asset.Id;
 
         var displayText = assetName;
-        if (asset is GameTexture { TexturePackFrame: not null })
+        if (asset is IGameTexture { AtlasReference: not null })
         {
             displayText = Strings.Debug.FormatTextureFromAtlas.ToString(displayText);
         }

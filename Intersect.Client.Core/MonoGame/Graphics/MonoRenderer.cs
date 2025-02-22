@@ -6,98 +6,97 @@ using Intersect.Client.Framework.File_Management;
 using Intersect.Client.Framework.GenericClasses;
 using Intersect.Client.Framework.Graphics;
 using Intersect.Client.General;
-using Intersect.Client.Interface.Shared;
 using Intersect.Client.Localization;
 using Intersect.Client.MonoGame.NativeInterop;
 using Intersect.Client.ThirdParty;
 using Intersect.Configuration;
+using Intersect.Core;
 using Intersect.Extensions;
-using Intersect.Utilities;
+using Intersect.Framework.Core;
+using Microsoft.Extensions.Logging;
 using Microsoft.Xna.Framework;
 using Microsoft.Xna.Framework.Content;
 using Microsoft.Xna.Framework.Graphics;
 using MathHelper = Intersect.Utilities.MathHelper;
 using XNARectangle = Microsoft.Xna.Framework.Rectangle;
 using XNAColor = Microsoft.Xna.Framework.Color;
+
 namespace Intersect.Client.MonoGame.Graphics;
 
-
-public class MonoRenderer : GameRenderer
+internal partial class MonoRenderer : GameRenderer
 {
+    private readonly ContentManager _contentManager;
 
-    private readonly List<MonoTexture> mAllTextures = new List<MonoTexture>();
+    private readonly Game _game;
 
-    private BasicEffect mBasicEffect;
+    private readonly GameWindow _gameWindow;
 
-    private ContentManager mContentManager;
+    private readonly GraphicsDeviceManager _graphicsDeviceManager;
 
-    private GameBlendModes mCurrentBlendmode = GameBlendModes.None;
+    private readonly BlendState _cutoutState;
 
-    private GameShader mCurrentShader;
+    private readonly BlendState _multiplyState;
 
-    private FloatRect mCurrentSpriteView;
+    private readonly BlendState _normalState;
 
-    private GameRenderTexture mCurrentTarget;
+    private readonly RasterizerState _rasterizerState = new()
+    {
+        ScissorTestEnable = true,
+    };
 
-    private FloatRect mCurrentView;
-
-    private BlendState mCutoutState;
-
-    private int mDisplayHeight;
-
-    private bool mDisplayModeChanged;
-
-    private int mDisplayWidth;
-
-    private int mFps;
-
-    private int mFpsCount;
-
-    private long mFpsTimer;
-
-    private long mFsChangedTimer = -1;
-
-    private Game mGame;
-
-    private GameWindow mGameWindow;
-
-    private GraphicsDeviceManager mGraphics;
-
-    private GraphicsDevice mGraphicsDevice;
-
-    private bool mInitialized;
-
-    private bool mInitializing;
-
-    private BlendState mMultiplyState;
-
-    private BlendState mNormalState;
-
-    private DisplayMode mOldDisplayMode;
-
-    RasterizerState mRasterizerState = new RasterizerState { ScissorTestEnable = true };
-
-    private int mScreenHeight;
-
-    private RenderTarget2D mScreenshotRenderTarget;
-
-    private int mScreenWidth;
-
-    private SpriteBatch mSpriteBatch;
-
-    private bool mSpriteBatchBegan;
+    private GraphicsDevice? _graphicsDevice;
 
     private List<string>? _validVideoModes;
 
-    private GameTexture? mWhiteTexture;
+    private BasicEffect? _basicEffect;
 
-    public MonoRenderer(GraphicsDeviceManager graphics, ContentManager contentManager, Game monoGame)
+    private GameBlendModes _currentBlendmode = GameBlendModes.None;
+
+    private GameShader? _currentShader;
+
+    private FloatRect _currentSpriteView;
+
+    private IGameRenderTexture? _currentRenderTarget;
+
+    private FloatRect _currentView;
+
+    private int _displayHeight;
+
+    private int _displayWidth;
+
+    private bool _displayModeChanged;
+
+    private int _fps;
+
+    private int _frames;
+
+    private long _nextFpsTime;
+
+    private long _fullscreenChangedTimer = -1;
+
+    private bool _initialized;
+
+    private bool _initializing;
+
+    private DisplayMode? _previousDisplayMode;
+
+    private int _screenHeight;
+
+    private int _screenWidth;
+
+    private RenderTarget2D? _screenshotRenderTarget;
+
+    private SpriteBatch? _spriteBatch;
+
+    private bool _spriteBatchBegan;
+
+    public MonoRenderer(GraphicsDeviceManager graphicsDeviceManager, ContentManager contentManager, Game monoGame)
     {
-        mGame = monoGame;
-        mGraphics = graphics;
-        mContentManager = contentManager;
+        _game = monoGame;
+        _graphicsDeviceManager = graphicsDeviceManager;
+        _contentManager = contentManager;
 
-        mNormalState = new BlendState
+        _normalState = new BlendState
         {
             ColorSourceBlend = Blend.SourceAlpha,
             AlphaSourceBlend = Blend.One,
@@ -107,36 +106,34 @@ public class MonoRenderer : GameRenderer
             AlphaBlendFunction = BlendFunction.Add,
         };
 
-        mMultiplyState = new BlendState
+        _multiplyState = new BlendState
         {
             ColorBlendFunction = BlendFunction.Add,
             ColorSourceBlend = Blend.DestinationColor,
-            ColorDestinationBlend = Blend.Zero
+            ColorDestinationBlend = Blend.Zero,
         };
 
-        mCutoutState = new BlendState
+        _cutoutState = new BlendState
         {
             ColorBlendFunction = BlendFunction.Add,
             ColorSourceBlend = Blend.Zero,
             ColorDestinationBlend = Blend.InverseSourceAlpha,
             AlphaBlendFunction = BlendFunction.Add,
             AlphaSourceBlend = Blend.Zero,
-            AlphaDestinationBlend = Blend.InverseSourceAlpha
+            AlphaDestinationBlend = Blend.InverseSourceAlpha,
         };
 
-        mGameWindow = monoGame.Window;
+        _gameWindow = monoGame.Window;
     }
-
-    public IList<string> ValidVideoModes => GetValidVideoModes();
 
     public void UpdateGraphicsState(int width, int height, bool initial = false)
     {
-        var currentDisplayMode = mGraphics.GraphicsDevice.Adapter.CurrentDisplayMode;
+        var currentDisplayMode = _graphicsDeviceManager.GraphicsDevice.Adapter.CurrentDisplayMode;
 
         if (Globals.Database.FullScreen)
         {
             var supported = false;
-            foreach (var mode in mGraphics.GraphicsDevice.Adapter.SupportedDisplayModes)
+            foreach (var mode in _graphicsDeviceManager.GraphicsDevice.Adapter.SupportedDisplayModes)
             {
                 if (mode.Width == width && mode.Height == height)
                 {
@@ -152,100 +149,101 @@ public class MonoRenderer : GameRenderer
                     Strings.Errors.DisplayNotSupportedError.ToString(
                         Strings.Internals.ResolutionXByY.ToString(width, height)
                     ),
-                    Strings.Errors.DisplayNotSupported,
-                    alertType: AlertType.Error
+                    Strings.Errors.DisplayNotSupported
                 );
             }
         }
 
-        var fsChanged = mGraphics.IsFullScreen != Globals.Database.FullScreen && !Globals.Database.FullScreen;
+        var isFullscreen = Globals.Database.FullScreen;
+        var updateFullscreen = initial || _graphicsDeviceManager.IsFullScreen != isFullscreen && !isFullscreen;
 
-        mGraphics.IsFullScreen = Globals.Database.FullScreen;
-        if (fsChanged)
+        if (updateFullscreen)
         {
-            mGraphics.ApplyChanges();
+            _graphicsDeviceManager.IsFullScreen = isFullscreen;
+            _graphicsDeviceManager.HardwareModeSwitch = !isFullscreen;
         }
 
-        mScreenWidth = width;
-        mScreenHeight = height;
-        mGraphics.PreferredBackBufferWidth = width;
-        mGraphics.PreferredBackBufferHeight = height;
-        mGraphics.SynchronizeWithVerticalRetrace = Globals.Database.TargetFps == 0;
+        var displayBounds = Sdl2.GetDisplayBounds();
+        var currentDisplayBounds = displayBounds[0];
+        var currentDisplayWidth = currentDisplayBounds.w;
+        var currentDisplayHeight = currentDisplayBounds.h;
+        if (isFullscreen)
+        {
+            width = currentDisplayWidth;
+            height = currentDisplayHeight;
+        }
+
+        _screenWidth = width;
+        _screenHeight = height;
+        _graphicsDeviceManager.PreferredBackBufferWidth = width;
+        _graphicsDeviceManager.PreferredBackBufferHeight = height;
+        _graphicsDeviceManager.SynchronizeWithVerticalRetrace = Globals.Database.TargetFps == 0;
 
         if (Globals.Database.TargetFps == 1)
         {
-            mGame.TargetElapsedTime = new TimeSpan(333333);
+            _game.TargetElapsedTime = new TimeSpan(333333);
         }
         else if (Globals.Database.TargetFps == 2)
         {
-            mGame.TargetElapsedTime = new TimeSpan(333333 / 2);
+            _game.TargetElapsedTime = new TimeSpan(333333 / 2);
         }
         else if (Globals.Database.TargetFps == 3)
         {
-            mGame.TargetElapsedTime = new TimeSpan(333333 / 3);
+            _game.TargetElapsedTime = new TimeSpan(333333 / 3);
         }
         else if (Globals.Database.TargetFps == 4)
         {
-            mGame.TargetElapsedTime = new TimeSpan(333333 / 4);
+            _game.TargetElapsedTime = new TimeSpan(333333 / 4);
         }
 
-        mGame.IsFixedTimeStep = Globals.Database.TargetFps > 0;
+        _game.IsFixedTimeStep = Globals.Database.TargetFps > 0;
 
-        mGraphics.ApplyChanges();
+        _graphicsDeviceManager.ApplyChanges();
 
-        mDisplayWidth = mGraphics.GraphicsDevice.Adapter.CurrentDisplayMode.Width;
-        mDisplayHeight = mGraphics.GraphicsDevice.Adapter.CurrentDisplayMode.Height;
-        if (fsChanged || initial)
+        _displayWidth = _graphicsDeviceManager.GraphicsDevice.Adapter.CurrentDisplayMode.Width;
+        _displayHeight = _graphicsDeviceManager.GraphicsDevice.Adapter.CurrentDisplayMode.Height;
+        if (updateFullscreen)
         {
-            var displayBounds = Sdl2.GetDisplayBounds();
-            var currentDisplayBounds = displayBounds[0];
-            mGameWindow.Position = new Microsoft.Xna.Framework.Point(
-                currentDisplayBounds.x + (currentDisplayBounds.w - mScreenWidth) / 2,
-                currentDisplayBounds.y + (currentDisplayBounds.h - mScreenHeight) / 2
+            _gameWindow.Position = new Microsoft.Xna.Framework.Point(
+                currentDisplayBounds.x + ((currentDisplayWidth - _screenWidth) / 2),
+                currentDisplayBounds.y + ((currentDisplayHeight - _screenHeight) / 2)
             );
         }
 
-        mOldDisplayMode = currentDisplayMode;
-        if (fsChanged)
+        _previousDisplayMode = currentDisplayMode;
+        if (updateFullscreen)
         {
-            mFsChangedTimer = Timing.Global.MillisecondsUtc + 1000;
+            _fullscreenChangedTimer = Timing.Global.MillisecondsUtc + 1000;
         }
 
-        if (fsChanged)
+        if (updateFullscreen)
         {
-            mDisplayModeChanged = true;
+            _displayModeChanged = true;
         }
-    }
-
-    public void CreateWhiteTexture()
-    {
-        var texture = new Texture2D(mGraphicsDevice, 1, 1);
-        texture.SetData(new[] { XNAColor.White });
-        mWhiteTexture = MonoTexture.CreateFromTexture2D(texture, "white_1px_1px");
     }
 
     public override bool Begin()
     {
-        if (mFsChangedTimer > -1 && mFsChangedTimer < Timing.Global.MillisecondsUtc)
+        if (_fullscreenChangedTimer > -1 && _fullscreenChangedTimer < Timing.Global.MillisecondsUtc)
         {
-            mGraphics.PreferredBackBufferWidth--;
-            mGraphics.ApplyChanges();
-            mGraphics.PreferredBackBufferWidth++;
-            mGraphics.ApplyChanges();
-            mFsChangedTimer = -1;
+            _graphicsDeviceManager.PreferredBackBufferWidth--;
+            _graphicsDeviceManager.ApplyChanges();
+            _graphicsDeviceManager.PreferredBackBufferWidth++;
+            _graphicsDeviceManager.ApplyChanges();
+            _fullscreenChangedTimer = -1;
         }
 
-        if (mGameWindow.ClientBounds.Width != 0 &&
-            mGameWindow.ClientBounds.Height != 0 &&
-            (mGameWindow.ClientBounds.Width != mScreenWidth || mGameWindow.ClientBounds.Height != mScreenHeight) &&
-            !mGraphics.IsFullScreen)
+        if (_gameWindow.ClientBounds.Width != 0 &&
+            _gameWindow.ClientBounds.Height != 0 &&
+            (_gameWindow.ClientBounds.Width != _screenWidth || _gameWindow.ClientBounds.Height != _screenHeight) &&
+            !_graphicsDeviceManager.IsFullScreen)
         {
-            if (mOldDisplayMode != mGraphics.GraphicsDevice.DisplayMode)
+            if (_previousDisplayMode != _graphicsDeviceManager.GraphicsDevice.DisplayMode)
             {
-                mDisplayModeChanged = true;
+                _displayModeChanged = true;
             }
 
-            UpdateGraphicsState(mScreenWidth, mScreenHeight);
+            UpdateGraphicsState(_screenWidth, _screenHeight);
         }
 
         return RecreateSpriteBatch();
@@ -253,68 +251,74 @@ public class MonoRenderer : GameRenderer
 
     protected override bool RecreateSpriteBatch()
     {
-        if (mSpriteBatchBegan)
+        if (_spriteBatchBegan)
         {
             EndSpriteBatch();
         }
 
-        StartSpritebatch(mCurrentView, GameBlendModes.None, null, null, true, null);
+        StartSpritebatch(
+            _currentView,
+            GameBlendModes.None,
+            null,
+            null,
+            true
+        );
         return true;
     }
 
     public Pointf GetMouseOffset()
     {
         return new Pointf(
-            mGraphics.PreferredBackBufferWidth / (float)mGameWindow.ClientBounds.Width,
-            mGraphics.PreferredBackBufferHeight / (float)mGameWindow.ClientBounds.Height
+            _graphicsDeviceManager.PreferredBackBufferWidth / (float)_gameWindow.ClientBounds.Width,
+            _graphicsDeviceManager.PreferredBackBufferHeight / (float)_gameWindow.ClientBounds.Height
         );
     }
 
     private void StartSpritebatch(
         FloatRect view,
         GameBlendModes mode = GameBlendModes.None,
-        GameShader shader = null,
-        GameRenderTexture target = null,
+        GameShader? shader = null,
+        IGameRenderTexture? target = null,
         bool forced = false,
-        RasterizerState rs = null,
+        RasterizerState? rs = null,
         bool drawImmediate = false
     )
     {
-        var viewsDiff = view.X != mCurrentSpriteView.X ||
-                        view.Y != mCurrentSpriteView.Y ||
-                        view.Width != mCurrentSpriteView.Width ||
-                        view.Height != mCurrentSpriteView.Height;
+        var viewsDiff = view.X != _currentSpriteView.X ||
+                        view.Y != _currentSpriteView.Y ||
+                        view.Width != _currentSpriteView.Width ||
+                        view.Height != _currentSpriteView.Height;
 
-        if (mode != mCurrentBlendmode ||
-            shader != mCurrentShader ||
-            shader != null && shader.ValuesChanged() ||
-            target != mCurrentTarget ||
+        if (mode != _currentBlendmode ||
+            shader != _currentShader ||
+            (shader != null && shader.ValuesChanged()) ||
+            target != _currentRenderTarget ||
             viewsDiff ||
             forced ||
             drawImmediate ||
-            !mSpriteBatchBegan)
+            !_spriteBatchBegan)
         {
-            if (mSpriteBatchBegan)
+            if (_spriteBatchBegan)
             {
-                mSpriteBatch.End();
+                _spriteBatch.End();
             }
 
             if (target != null)
             {
-                mGraphicsDevice?.SetRenderTarget((RenderTarget2D)target.GetTexture());
+                _graphicsDevice?.SetRenderTarget((RenderTarget2D)target.GetTexture());
             }
             else
             {
-                mGraphicsDevice?.SetRenderTarget(mScreenshotRenderTarget);
+                _graphicsDevice?.SetRenderTarget(_screenshotRenderTarget);
             }
 
-            var blend = mNormalState;
+            var blend = _normalState;
             Effect useEffect = null;
 
             switch (mode)
             {
                 case GameBlendModes.None:
-                    blend = mNormalState;
+                    blend = _normalState;
 
                     break;
 
@@ -324,7 +328,7 @@ public class MonoRenderer : GameRenderer
                     break;
 
                 case GameBlendModes.Multiply:
-                    blend = mMultiplyState;
+                    blend = _multiplyState;
 
                     break;
 
@@ -339,7 +343,7 @@ public class MonoRenderer : GameRenderer
                     break;
 
                 case GameBlendModes.Cutout:
-                    blend = mCutoutState;
+                    blend = _cutoutState;
 
                     break;
             }
@@ -350,7 +354,7 @@ public class MonoRenderer : GameRenderer
                 shader.ResetChanged();
             }
 
-            mSpriteBatch.Begin(
+            _spriteBatch.Begin(
                 drawImmediate ? SpriteSortMode.Immediate : SpriteSortMode.Deferred,
                 blend,
                 SamplerState.PointClamp,
@@ -360,73 +364,74 @@ public class MonoRenderer : GameRenderer
                 CreateViewMatrix(view)
             );
 
-            mCurrentSpriteView = view;
-            mCurrentBlendmode = mode;
-            mCurrentShader = shader;
-            mCurrentTarget = target;
-            mSpriteBatchBegan = true;
+            _currentSpriteView = view;
+            _currentBlendmode = mode;
+            _currentShader = shader;
+            _currentRenderTarget = target;
+            _spriteBatchBegan = true;
         }
     }
 
     public override bool DisplayModeChanged()
     {
-        var changed = mDisplayModeChanged;
-        mDisplayModeChanged = false;
+        var changed = _displayModeChanged;
+        _displayModeChanged = false;
 
         return changed;
     }
 
     public void EndSpriteBatch()
     {
-        if (mSpriteBatchBegan)
+        if (_spriteBatchBegan)
         {
-            mSpriteBatch.End();
+            _spriteBatch.End();
         }
 
-        mSpriteBatchBegan = false;
+        _spriteBatchBegan = false;
     }
 
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
-    public static XNAColor ConvertColor(Color color) => new(color.R, color.G, color.B, color.A);
+    public static XNAColor ConvertColor(Color color)
+    {
+        return new XNAColor(color.R, color.G, color.B, color.A);
+    }
 
     public override void Clear(Color color)
     {
-        mGraphicsDevice.Clear(ConvertColor(color));
+        _graphicsDevice.Clear(ConvertColor(color));
     }
 
     public override void DrawTileBuffer(GameTileBuffer buffer)
     {
         EndSpriteBatch();
-        if (mGraphicsDevice == null || buffer == null)
+        if (_graphicsDevice == null || buffer == null)
         {
             return;
         }
 
-        mGraphicsDevice.SetRenderTarget(mScreenshotRenderTarget);
-        mGraphicsDevice.BlendState = mNormalState;
-        mGraphicsDevice.RasterizerState = RasterizerState.CullCounterClockwise;
-        mGraphicsDevice.SamplerStates[0] = SamplerState.PointClamp;
-        mGraphicsDevice.DepthStencilState = DepthStencilState.None;
-        ((MonoTileBuffer)buffer).Draw(mBasicEffect, mCurrentView);
+        _graphicsDevice.SetRenderTarget(_screenshotRenderTarget);
+        _graphicsDevice.BlendState = _normalState;
+        _graphicsDevice.RasterizerState = RasterizerState.CullCounterClockwise;
+        _graphicsDevice.SamplerStates[0] = SamplerState.PointClamp;
+        _graphicsDevice.DepthStencilState = DepthStencilState.None;
+        ((MonoTileBuffer)buffer).Draw(_basicEffect, _currentView);
     }
 
     public override void Close()
     {
     }
 
-    public override GameTexture GetWhiteTexture()
+    protected override IGameTexture CreateWhitePixel()
     {
-        return mWhiteTexture;
+        Texture2D platformTexture = new(_graphicsDevice, 1, 1);
+        platformTexture.SetData([XNAColor.White]);
+        var gameTexture = CreateGameTextureFromPlatformTexture("system:white_1px_1px", platformTexture);
+        return gameTexture;
     }
 
     public ContentManager GetContentManager()
     {
-        return mContentManager;
-    }
-
-    public override GameRenderTexture CreateRenderTexture(int width, int height)
-    {
-        return new MonoRenderTexture(mGraphicsDevice, width, height);
+        return _contentManager;
     }
 
     public override void DrawString(
@@ -437,7 +442,7 @@ public class MonoRenderer : GameRenderer
         float fontScale,
         Color? fontColor,
         bool worldPos = true,
-        GameRenderTexture? renderTexture = null,
+        IGameRenderTexture? renderTexture = null,
         Color? borderColor = null
     )
     {
@@ -447,7 +452,12 @@ public class MonoRenderer : GameRenderer
             return;
         }
 
-        StartSpritebatch(mCurrentView, GameBlendModes.None, null, renderTexture, false, null);
+        StartSpritebatch(
+            _currentView,
+            GameBlendModes.None,
+            null,
+            renderTexture
+        );
         foreach (var chr in text)
         {
             if (!font.Characters.Contains(chr))
@@ -459,41 +469,69 @@ public class MonoRenderer : GameRenderer
         if (borderColor != null && borderColor != Color.Transparent)
         {
             var platformBorderColor = ConvertColor(borderColor);
-            mSpriteBatch.DrawString(
-                font, text, new Vector2(x, y - 1), platformBorderColor, 0f, Vector2.Zero,
-                new Vector2(fontScale, fontScale), SpriteEffects.None, 0
+            _spriteBatch.DrawString(
+                font,
+                text,
+                new Vector2(x, y - 1),
+                platformBorderColor,
+                0f,
+                Vector2.Zero,
+                new Vector2(fontScale, fontScale),
+                SpriteEffects.None,
+                0
             );
 
-            mSpriteBatch.DrawString(
-                font, text, new Vector2(x - 1, y), platformBorderColor, 0f, Vector2.Zero,
-                new Vector2(fontScale, fontScale), SpriteEffects.None, 0
+            _spriteBatch.DrawString(
+                font,
+                text,
+                new Vector2(x - 1, y),
+                platformBorderColor,
+                0f,
+                Vector2.Zero,
+                new Vector2(fontScale, fontScale),
+                SpriteEffects.None,
+                0
             );
 
-            mSpriteBatch.DrawString(
-                font, text, new Vector2(x + 1, y), platformBorderColor, 0f, Vector2.Zero,
-                new Vector2(fontScale, fontScale), SpriteEffects.None, 0
+            _spriteBatch.DrawString(
+                font,
+                text,
+                new Vector2(x + 1, y),
+                platformBorderColor,
+                0f,
+                Vector2.Zero,
+                new Vector2(fontScale, fontScale),
+                SpriteEffects.None,
+                0
             );
 
-            mSpriteBatch.DrawString(
-                font, text, new Vector2(x, y + 1), platformBorderColor, 0f, Vector2.Zero,
-                new Vector2(fontScale, fontScale), SpriteEffects.None, 0
+            _spriteBatch.DrawString(
+                font,
+                text,
+                new Vector2(x, y + 1),
+                platformBorderColor,
+                0f,
+                Vector2.Zero,
+                new Vector2(fontScale, fontScale),
+                SpriteEffects.None,
+                0
             );
         }
 
-        mSpriteBatch.DrawString(font, text, new Vector2(x, y), ConvertColor(fontColor));
+        _spriteBatch.DrawString(font, text, new Vector2(x, y), ConvertColor(fontColor));
     }
 
     public override void DrawString(
         string text,
-        GameFont gameFont,
+        GameFont? gameFont,
         float x,
         float y,
         float fontScale,
         Color fontColor,
         bool worldPos,
-        GameRenderTexture renderTexture,
+        IGameRenderTexture renderTexture,
         FloatRect clipRect,
-        Color borderColor = null
+        Color? borderColor = null
     )
     {
         if (gameFont == null)
@@ -501,11 +539,10 @@ public class MonoRenderer : GameRenderer
             return;
         }
 
-        x += mCurrentView.X;
-        y += mCurrentView.Y;
+        x += _currentView.X;
+        y += _currentView.Y;
 
-        var font = (SpriteFont)gameFont.GetFont();
-        if (font == null)
+        if (gameFont.GetFont() is not SpriteFont font)
         {
             return;
         }
@@ -513,12 +550,23 @@ public class MonoRenderer : GameRenderer
         var clr = ConvertColor(fontColor);
 
         //Copy the current scissor rect so we can restore it after
-        var currentRect = mSpriteBatch.GraphicsDevice.ScissorRectangle;
-        StartSpritebatch(mCurrentView, GameBlendModes.None, null, renderTexture, false, mRasterizerState, true);
+        var currentRect = _spriteBatch.GraphicsDevice.ScissorRectangle;
+        StartSpritebatch(
+            _currentView,
+            GameBlendModes.None,
+            null,
+            renderTexture,
+            false,
+            _rasterizerState,
+            true
+        );
 
         //Set the current scissor rectangle
-        mSpriteBatch.GraphicsDevice.ScissorRectangle = new XNARectangle(
-            (int)clipRect.X, (int)clipRect.Y, (int)clipRect.Width, (int)clipRect.Height
+        _spriteBatch.GraphicsDevice.ScissorRectangle = new XNARectangle(
+            (int)clipRect.X,
+            (int)clipRect.Y,
+            (int)clipRect.Width,
+            (int)clipRect.Height
         );
 
         foreach (var chr in text)
@@ -532,28 +580,56 @@ public class MonoRenderer : GameRenderer
         if (borderColor != null && borderColor != Color.Transparent)
         {
             var platformBorderColor = ConvertColor(borderColor);
-            mSpriteBatch.DrawString(
-                font, text, new Vector2(x, y - 1), platformBorderColor, 0f, Vector2.Zero,
-                new Vector2(fontScale, fontScale), SpriteEffects.None, 0
+            _spriteBatch.DrawString(
+                font,
+                text,
+                new Vector2(x, y - 1),
+                platformBorderColor,
+                0f,
+                Vector2.Zero,
+                new Vector2(fontScale, fontScale),
+                SpriteEffects.None,
+                0
             );
 
-            mSpriteBatch.DrawString(
-                font, text, new Vector2(x - 1, y), platformBorderColor, 0f, Vector2.Zero,
-                new Vector2(fontScale, fontScale), SpriteEffects.None, 0
+            _spriteBatch.DrawString(
+                font,
+                text,
+                new Vector2(x - 1, y),
+                platformBorderColor,
+                0f,
+                Vector2.Zero,
+                new Vector2(fontScale, fontScale),
+                SpriteEffects.None,
+                0
             );
 
-            mSpriteBatch.DrawString(
-                font, text, new Vector2(x + 1, y), platformBorderColor, 0f, Vector2.Zero,
-                new Vector2(fontScale, fontScale), SpriteEffects.None, 0
+            _spriteBatch.DrawString(
+                font,
+                text,
+                new Vector2(x + 1, y),
+                platformBorderColor,
+                0f,
+                Vector2.Zero,
+                new Vector2(fontScale, fontScale),
+                SpriteEffects.None,
+                0
             );
 
-            mSpriteBatch.DrawString(
-                font, text, new Vector2(x, y + 1), platformBorderColor, 0f, Vector2.Zero,
-                new Vector2(fontScale, fontScale), SpriteEffects.None, 0
+            _spriteBatch.DrawString(
+                font,
+                text,
+                new Vector2(x, y + 1),
+                platformBorderColor,
+                0f,
+                Vector2.Zero,
+                new Vector2(fontScale, fontScale),
+                SpriteEffects.None,
+                0
             );
         }
 
-        mSpriteBatch.DrawString(
+        _spriteBatch.DrawString(
             font,
             text,
             new Vector2(x, y),
@@ -568,16 +644,16 @@ public class MonoRenderer : GameRenderer
         EndSpriteBatch();
 
         //Reset scissor rectangle to the saved value
-        mSpriteBatch.GraphicsDevice.ScissorRectangle = currentRect;
+        _spriteBatch.GraphicsDevice.ScissorRectangle = currentRect;
     }
 
     public override GameTileBuffer CreateTileBuffer()
     {
-        return new MonoTileBuffer(mGraphicsDevice);
+        return new MonoTileBuffer(_graphicsDevice);
     }
 
     public override void DrawTexture(
-        GameTexture tex,
+        IGameTexture tex,
         float sx,
         float sy,
         float sw,
@@ -587,7 +663,7 @@ public class MonoRenderer : GameRenderer
         float tw,
         float th,
         Color renderColor,
-        GameRenderTexture? renderTarget = null,
+        IGameRenderTexture? renderTarget = null,
         GameBlendModes blendMode = GameBlendModes.None,
         GameShader? shader = null,
         float rotationDegrees = 0,
@@ -603,10 +679,10 @@ public class MonoRenderer : GameRenderer
 
         var packRotated = false;
 
-        var pack = tex.GetTexturePackFrame();
+        var pack = tex.AtlasReference;
         if (pack != null)
         {
-            if (pack.Rotated)
+            if (pack.IsRotated)
             {
                 rotationDegrees -= 90;
                 var z = tw;
@@ -614,8 +690,8 @@ public class MonoRenderer : GameRenderer
                 th = z;
 
                 z = sx;
-                sx = pack.Rect.Right - sy - sh;
-                sy = pack.Rect.Top + z;
+                sx = pack.Bounds.Right - sy - sh;
+                sy = pack.Bounds.Top + z;
 
                 z = sw;
                 sw = sh;
@@ -624,8 +700,8 @@ public class MonoRenderer : GameRenderer
             }
             else
             {
-                sx += pack.Rect.X;
-                sy += pack.Rect.Y;
+                sx += pack.Bounds.X;
+                sy += pack.Bounds.Y;
             }
         }
 
@@ -661,24 +737,40 @@ public class MonoRenderer : GameRenderer
         var color = ConvertColor(renderColor);
 
         // Use a single Draw method to avoid duplicating code.
-        void Draw(FloatRect currentView, GameRenderTexture targetObject)
+        void Draw(FloatRect currentView, IGameRenderTexture targetObject)
         {
-            StartSpritebatch(currentView, blendMode, shader, targetObject, false, null, drawImmediate);
+            StartSpritebatch(
+                currentView,
+                blendMode,
+                shader,
+                targetObject,
+                false,
+                null,
+                drawImmediate
+            );
 
-            mSpriteBatch.Draw((Texture2D)texture, new Vector2(tx, ty),
-                new XNARectangle((int)sx, (int)sy, (int)sw, (int)sh), color, rotationDegrees, origin,
-                new Vector2(tw / sw, th / sh), SpriteEffects.None, 0);
+            _spriteBatch.Draw(
+                (Texture2D)texture,
+                new Vector2(tx, ty),
+                new XNARectangle((int)sx, (int)sy, (int)sw, (int)sh),
+                color,
+                rotationDegrees,
+                origin,
+                new Vector2(tw / sw, th / sh),
+                SpriteEffects.None,
+                0
+            );
         }
 
         if (renderTarget == null)
         {
             if (isUi)
             {
-                tx += mCurrentView.X;
-                ty += mCurrentView.Y;
+                tx += _currentView.X;
+                ty += _currentView.Y;
             }
 
-            Draw(mCurrentView, null);
+            Draw(_currentView, null);
         }
         else
         {
@@ -698,60 +790,63 @@ public class MonoRenderer : GameRenderer
     private Pointf Rotate(Pointf pnt, Pointf ctr, float angle)
     {
         return new Pointf(
-            (float)(pnt.X + ctr.X * Math.Cos(angle) - ctr.Y * Math.Sin(angle)),
-            (float)(pnt.Y + ctr.X * Math.Sin(angle) + ctr.Y * Math.Cos(angle))
+            (float)(pnt.X + (ctr.X * Math.Cos(angle)) - (ctr.Y * Math.Sin(angle))),
+            (float)(pnt.Y + (ctr.X * Math.Sin(angle)) + (ctr.Y * Math.Cos(angle)))
         );
     }
 
-    public override void End()
+    protected override void DoEnd()
     {
         EndSpriteBatch();
-        mFpsCount++;
-        if (mFpsTimer < Timing.Global.MillisecondsUtc)
+
+        ++_frames;
+        var now = Timing.Global.MillisecondsUtc;
+        if (_nextFpsTime > now)
         {
-            mFps = mFpsCount;
-            mFpsCount = 0;
-            mFpsTimer = Timing.Global.MillisecondsUtc + 1000;
-            mGameWindow.Title = Strings.Main.GameName;
+            return;
         }
 
-        foreach (var texture in mAllTextures)
-        {
-            texture?.Update();
-        }
+        var delta = now - _nextFpsTime;
+        var scale = delta / 1000f;
+
+        var frames = _frames;
+        var scaledFrames = (int)(frames * scale);
+        _fps = frames;//scaledFrames;
+        _frames = 0;//Math.Max(0, frames - scaledFrames);
+        _nextFpsTime = now + 1000;
+        _gameWindow.Title = Strings.Main.GameName;
     }
 
-    public override int GetFps()
-    {
-        return mFps;
-    }
+    public override int FPS => _fps;
 
-    public override int GetScreenHeight()
-    {
-        return mScreenHeight;
-    }
+    public override int ScreenHeight => _screenHeight;
 
-    public override int GetScreenWidth()
-    {
-        return mScreenWidth;
-    }
+    public override int ScreenWidth => _screenWidth;
 
     public override string GetResolutionString()
     {
-        return mScreenWidth + "x" + mScreenHeight;
+        return _screenWidth + "x" + _screenHeight;
     }
 
     public Resolution[] GetAllowedResolutions()
     {
         var allowedResolutions = new[]
             {
-                new Resolution(800, 600), new Resolution(1024, 768), new Resolution(1024, 720),
-                new Resolution(1280, 720), new Resolution(1280, 768), new Resolution(1280, 1024),
-                new Resolution(1360, 768), new Resolution(1366, 768), new Resolution(1440, 1050),
-                new Resolution(1440, 900), new Resolution(1600, 900), new Resolution(1680, 1050),
+                new Resolution(800),
+                new Resolution(1024, 768),
+                new Resolution(1024, 720),
+                new Resolution(1280, 720),
+                new Resolution(1280, 768),
+                new Resolution(1280, 1024),
+                new Resolution(1360, 768),
+                new Resolution(1366, 768),
+                new Resolution(1440, 1050),
+                new Resolution(1440, 900),
+                new Resolution(1600, 900),
+                new Resolution(1680, 1050),
                 new Resolution(1920, 1080),
             }.Concat(
-                mGraphicsDevice.Adapter.SupportedDisplayModes
+                _graphicsDevice.Adapter.SupportedDisplayModes
                     .Select(displayMode => new Resolution(displayMode.Width, displayMode.Height))
                     .Where(resolution => resolution is { X: >= 800, Y: >= 480 })
             )
@@ -763,66 +858,69 @@ public class MonoRenderer : GameRenderer
         {
             allowedResolutions = new[]
             {
-                new Resolution(mGraphicsDevice.DisplayMode.Width, mGraphicsDevice.DisplayMode.Height),
+                new Resolution(_graphicsDevice.DisplayMode.Width, _graphicsDevice.DisplayMode.Height),
             };
         }
 
         return allowedResolutions;
     }
 
-    public override List<string> GetValidVideoModes()
+    public override List<string> ValidVideoModes
     {
-        if (_validVideoModes != null)
+        get
         {
+            if (_validVideoModes != null)
+            {
+                return _validVideoModes;
+            }
+
+            _validVideoModes = new List<string>();
+
+            var allowedResolutions = GetAllowedResolutions();
+
+            var displayWidth = _graphicsDevice.DisplayMode?.Width;
+            var displayHeight = _graphicsDevice.DisplayMode?.Height;
+
+            foreach (var resolution in allowedResolutions)
+            {
+                if (resolution.X > displayWidth)
+                {
+                    continue;
+                }
+
+                if (resolution.Y > displayHeight)
+                {
+                    continue;
+                }
+
+                _validVideoModes.Add(resolution.ToString());
+            }
+
             return _validVideoModes;
         }
-
-        _validVideoModes = new List<string>();
-
-        var allowedResolutions = GetAllowedResolutions();
-
-        var displayWidth = mGraphicsDevice.DisplayMode?.Width;
-        var displayHeight = mGraphicsDevice.DisplayMode?.Height;
-
-        foreach (var resolution in allowedResolutions)
-        {
-            if (resolution.X > displayWidth)
-            {
-                continue;
-            }
-
-            if (resolution.Y > displayHeight)
-            {
-                continue;
-            }
-
-            _validVideoModes.Add(resolution.ToString());
-        }
-
-        return _validVideoModes;
     }
 
     public override FloatRect GetView()
     {
-        return mCurrentView;
+        return _currentView;
     }
 
     public override void Init()
     {
-        if (mInitializing)
+        if (_initializing)
         {
             return;
         }
 
-        mInitializing = true;
+        _initializing = true;
 
         var database = Globals.Database;
-        var validVideoModes = GetValidVideoModes();
+        var validVideoModes = ValidVideoModes;
 
         if (database.TargetResolution < 0)
         {
             var allowedResolutions = GetAllowedResolutions();
-            var currentDisplayMode = mGraphicsDevice.Adapter.CurrentDisplayMode;
+            var currentDisplayMode = _graphicsDevice.Adapter.CurrentDisplayMode;
             var defaultResolution = allowedResolutions.LastOrDefault(
                 allowedResolution => currentDisplayMode.Width != allowedResolution.X &&
                                      currentDisplayMode.Width ==
@@ -859,26 +957,21 @@ public class MonoRenderer : GameRenderer
             PreferredResolution = resolution;
         }
 
-        mGraphics.PreferredBackBufferWidth = PreferredResolution.X;
-        mGraphics.PreferredBackBufferHeight = PreferredResolution.Y;
+        _graphicsDeviceManager.PreferredBackBufferWidth = PreferredResolution.X;
+        _graphicsDeviceManager.PreferredBackBufferHeight = PreferredResolution.Y;
 
         UpdateGraphicsState(ActiveResolution.X, ActiveResolution.Y, true);
 
-        if (mWhiteTexture == null)
-        {
-            CreateWhiteTexture();
-        }
-
-        mInitializing = false;
+        _initializing = false;
     }
 
     public void Init(GraphicsDevice graphicsDevice)
     {
-        mGraphicsDevice = graphicsDevice;
-        mBasicEffect = new BasicEffect(mGraphicsDevice);
-        mBasicEffect.LightingEnabled = false;
-        mBasicEffect.TextureEnabled = true;
-        mSpriteBatch = new SpriteBatch(mGraphicsDevice);
+        _graphicsDevice = graphicsDevice;
+        _basicEffect = new BasicEffect(_graphicsDevice);
+        _basicEffect.LightingEnabled = false;
+        _basicEffect.TextureEnabled = true;
+        _spriteBatch = new SpriteBatch(_graphicsDevice);
     }
 
     public override GameFont LoadFont(string filename)
@@ -901,34 +994,13 @@ public class MonoRenderer : GameRenderer
         name = string.Join("_", parts.Take(parts.Length - 1));
 
         // Return a new MonoFont with the extracted name and size
-        return new MonoFont(name, filename, size, mContentManager);
+        return new MonoFont(name, filename, size, _contentManager);
     }
 
     public override GameShader LoadShader(string shaderName)
     {
-        return new MonoShader(shaderName, mContentManager);
+        return new MonoShader(shaderName, _contentManager);
     }
-
-    public override GameTexture LoadTexture(string filename, string realFilename)
-    {
-        var packFrame = GameTexturePacks.GetFrame(filename);
-        if (packFrame != null)
-        {
-            var tx = new MonoTexture(mGraphicsDevice, filename, packFrame);
-            mAllTextures.Add(tx);
-
-            return tx;
-        }
-
-        var tex = new MonoTexture(mGraphicsDevice, filename, realFilename);
-        mAllTextures.Add(tex);
-
-        return tex;
-    }
-
-    /// <inheritdoc />
-    public override GameTexture LoadTexture(string assetName, Func<Stream> createStream) =>
-        new MonoTexture(mGraphicsDevice, assetName, createStream);
 
     public override Pointf MeasureText(string text, GameFont? gameFont, float fontScale)
     {
@@ -955,83 +1027,97 @@ public class MonoRenderer : GameRenderer
     {
         return Matrix.CreateRotationZ(0f) *
                Matrix.CreateTranslation(-view.X, -view.Y, 0) *
-               Matrix.CreateScale(new Vector3(_scale));
+               Matrix.CreateScale(new Vector3(Scale));
     }
 
     public override void SetView(FloatRect view)
     {
-        mCurrentView = view;
+        _currentView = view;
 
-        Matrix.CreateOrthographicOffCenter(0, view.Width, view.Height, 0, 0f, -1, out var projection);
+        Matrix.CreateOrthographicOffCenter(
+            0,
+            view.Width,
+            view.Height,
+            0,
+            0f,
+            -1,
+            out var projection
+        );
         projection.M41 += -0.5f * projection.M11;
         projection.M42 += -0.5f * projection.M22;
-        mBasicEffect.Projection = projection;
-        mBasicEffect.View = CreateViewMatrix(view);
+        _basicEffect.Projection = projection;
+        _basicEffect.View = CreateViewMatrix(view);
     }
 
     public override bool BeginScreenshot()
     {
-        if (mGraphicsDevice == null)
+        if (_graphicsDevice == null)
         {
             return false;
         }
 
-        mScreenshotRenderTarget = new RenderTarget2D(
-            mGraphicsDevice,
-            mScreenWidth,
-            mScreenHeight,
-            mipMap: false,
-            preferredFormat: mGraphicsDevice.PresentationParameters.BackBufferFormat,
-            preferredDepthFormat: mGraphicsDevice.PresentationParameters.DepthStencilFormat,
+        _screenshotRenderTarget = new RenderTarget2D(
+            _graphicsDevice,
+            _screenWidth,
+            _screenHeight,
+            false,
+            _graphicsDevice.PresentationParameters.BackBufferFormat,
+            _graphicsDevice.PresentationParameters.DepthStencilFormat,
             /* For whatever reason if this isn't zero everything breaks in .NET 7 on MacOS and most Windows devices */
-            preferredMultiSampleCount: 0, // mGraphicsDevice.PresentationParameters.MultiSampleCount,
-            usage: RenderTargetUsage.PreserveContents
+            0, // mGraphicsDevice.PresentationParameters.MultiSampleCount,
+            RenderTargetUsage.PreserveContents
         );
 
         return true;
     }
 
+    private bool WriteScreenshotRenderTargetAsPngTo(Stream stream, string? hint)
+    {
+        if (_screenshotRenderTarget.IsContentLost)
+        {
+            return false;
+        }
+
+        try
+        {
+            _screenshotRenderTarget.SaveAsPng(stream, _screenshotRenderTarget.Width, _screenshotRenderTarget.Height);
+            return true;
+        }
+        catch (Exception exception)
+        {
+            ApplicationContext.CurrentContext.Logger.LogWarning(
+                exception,
+                "Exception when writing screenshot to {Target}",
+                string.IsNullOrWhiteSpace(hint) ? "stream" : hint
+            );
+            return false;
+        }
+    }
+
     public override void EndScreenshot()
     {
-        if (mScreenshotRenderTarget == null)
+        if (_screenshotRenderTarget == null)
         {
             return;
         }
 
-        ScreenshotRequests.ForEach(
-            screenshotRequestStream =>
-            {
-                if (screenshotRequestStream == null)
-                {
-                    return;
-                }
+        ProcessScreenshots(WriteScreenshotRenderTargetAsPngTo);
 
-                mScreenshotRenderTarget.SaveAsPng(
-                    screenshotRequestStream, mScreenshotRenderTarget.Width, mScreenshotRenderTarget.Height
-                );
-
-                screenshotRequestStream.Close();
-            }
-        );
-
-        ScreenshotRequests.Clear();
-
-        if (mGraphicsDevice == null)
+        if (_graphicsDevice == null)
         {
             return;
         }
 
-        var skippedFrame = mScreenshotRenderTarget;
-        mScreenshotRenderTarget = null;
-        mGraphicsDevice.SetRenderTarget(null);
+        var skippedFrame = _screenshotRenderTarget;
+        _screenshotRenderTarget = null;
+        _graphicsDevice.SetRenderTarget(null);
 
         if (!Begin())
         {
             return;
         }
 
-        mSpriteBatch?.Draw(skippedFrame, new XNARectangle(), XNAColor.White);
+        _spriteBatch?.Draw(skippedFrame, new XNARectangle(), XNAColor.White);
         End();
     }
-
 }

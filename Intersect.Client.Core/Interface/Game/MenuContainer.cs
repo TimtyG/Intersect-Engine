@@ -226,7 +226,7 @@ public partial class MenuContainer : Panel
         SizeToChildren(recursive: true);
 
         SkipRender();
-        Defer(
+        RunOnMainThread(
             action: () =>
             {
                 LoadJsonUi(GameContentManager.UI.InGame, Graphics.Renderer!.GetResolutionString());
@@ -427,7 +427,7 @@ public partial class MenuContainer : Panel
                           _questsWindow.IsVisible() ||
                           _spellsWindow.IsVisible() ||
                           _partyWindow.IsVisible() ||
-                          _guildWindow.IsVisible;
+                          _guildWindow.IsVisibleInTree;
         return windowsOpen;
     }
 

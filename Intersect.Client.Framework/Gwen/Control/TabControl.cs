@@ -21,6 +21,7 @@ public partial class TabControl : Base
     ///     Initializes a new instance of the <see cref="TabControl" /> class.
     /// </summary>
     /// <param name="parent">Parent control.</param>
+    /// <param name="name"></param>
     public TabControl(Base parent, string? name = default) : base(parent, name: name)
     {
         _scrollbarButtons = new ScrollBarButton[2];
@@ -178,7 +179,7 @@ public partial class TabControl : Base
         if (_activeButton is null)
         {
             _activeButton = button;
-            button.Page.IsVisible = true;
+            button.Page.IsVisibleInTree = true;
         }
 
         TabAdded?.Invoke(this, EventArgs.Empty);
@@ -214,7 +215,7 @@ public partial class TabControl : Base
         {
             if (_activeButton.Page is {} previousTabPage)
             {
-                previousTabPage.IsVisible = false;
+                previousTabPage.IsVisibleInTree = false;
             }
 
             _activeButton.Redraw();
@@ -225,15 +226,18 @@ public partial class TabControl : Base
         }
 
         _activeButton = nextTab;
+        nextTab.InvalidateDock();
         nextTab.Redraw();
 
-        page.IsVisible = true;
+        page.IsVisibleInTree = true;
 
-        TabChanged?.Invoke(control, new TabChangeEventArgs
-        {
-            PreviousTab = previousTab,
-            ActiveTab = nextTab,
-        });
+        TabChanged?.Invoke(
+            control,
+            new TabChangeEventArgs
+            {
+                PreviousTab = previousTab, ActiveTab = nextTab,
+            }
+        );
 
         _tabStrip.Invalidate();
         Invalidate();
@@ -243,9 +247,9 @@ public partial class TabControl : Base
     ///     Function invoked after layout.
     /// </summary>
     /// <param name="skin">Skin to use.</param>
-    protected override void PostLayout(Skin.Base skin)
+    protected override void DoPostlayout(Skin.Base skin)
     {
-        base.PostLayout(skin);
+        base.DoPostlayout(skin);
         HandleOverflow();
     }
 

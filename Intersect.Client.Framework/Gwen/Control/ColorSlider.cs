@@ -16,7 +16,7 @@ public partial class ColorSlider : Base
 
     private int mSelectedDist;
 
-    private GameTexture mTexture;
+    private IGameTexture mTexture;
 
     /// <summary>
     ///     Initializes a new instance of the <see cref="ColorSlider" /> class.
@@ -42,14 +42,6 @@ public partial class ColorSlider : Base
     ///     Invoked when the selected color has been changed.
     /// </summary>
     public event GwenEventHandler<EventArgs> ColorChanged;
-
-    /// <summary>
-    ///     Performs application-defined tasks associated with freeing, releasing, or resetting unmanaged resources.
-    /// </summary>
-    public override void Dispose()
-    {
-        base.Dispose();
-    }
 
     /// <summary>
     ///     Renders the control using specified skin.

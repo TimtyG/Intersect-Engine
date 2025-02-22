@@ -6,6 +6,7 @@ using Intersect.Client.Framework.Gwen.Control.EventArguments;
 using Intersect.Client.General;
 using Intersect.Client.Interface.Shared;
 using Intersect.Client.Localization;
+using Intersect.Framework.Core;
 using Intersect.Utilities;
 
 namespace Intersect.Client.Interface.Game;
@@ -24,7 +25,7 @@ public sealed partial class SimplifiedEscapeMenu : Framework.Gwen.Control.Menu
         IconMarginDisabled = true;
         _settingsWindowProvider = settingsWindowProvider;
 
-        Children.Clear();
+        ClearChildren();
 
         _settings = AddItem(Strings.EscapeMenu.Settings);
         _character = AddItem(Strings.EscapeMenu.CharacterSelect);
@@ -125,7 +126,7 @@ public sealed partial class SimplifiedEscapeMenu : Framework.Gwen.Control.Menu
     private void OpenSettingsWindow(object? sender, EventArgs? e)
     {
         var settingsWindow = _settingsWindowProvider();
-        if (settingsWindow.IsVisible)
+        if (settingsWindow.IsVisibleInTree)
         {
             return;
         }

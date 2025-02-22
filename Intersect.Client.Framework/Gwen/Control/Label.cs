@@ -27,7 +27,7 @@ public partial class Label : Base, ILabel
 
     private string? mBackgroundTemplateFilename;
 
-    private GameTexture? mBackgroundTemplateTex;
+    private IGameTexture? mBackgroundTemplateTex;
 
     protected Color? mClickedTextColor;
 
@@ -171,6 +171,19 @@ public partial class Label : Base, ILabel
     private static bool IsArgument(string format, Range range, int argumentIndex) =>
         int.TryParse(format[range], out var index) && index == argumentIndex;
 
+    public bool IsEmpty
+    {
+        get
+        {
+            if (Children.Count > 1)
+            {
+                return false;
+            }
+
+            return Children.FirstOrDefault() is null or Text { IsVisibleInParent: false };
+        }
+    }
+
     public WrappingBehavior WrappingBehavior
     {
         get => _wrappingBehavior;
@@ -186,7 +199,7 @@ public partial class Label : Base, ILabel
         }
     }
 
-    public GameTexture? ToolTipBackground
+    public IGameTexture? ToolTipBackground
     {
         get => _tooltipBackground;
         set
@@ -324,7 +337,7 @@ public partial class Label : Base, ILabel
 
     private string? _textOverride;
     private WrappingBehavior _wrappingBehavior;
-    private GameTexture? _tooltipBackground;
+    private IGameTexture? _tooltipBackground;
 
     /// <summary>
     ///     Text override - used to display different string.
@@ -479,7 +492,7 @@ public partial class Label : Base, ILabel
         }
     }
 
-    public GameTexture GetTemplate()
+    public IGameTexture GetTemplate()
     {
         return mBackgroundTemplateTex;
     }
@@ -502,7 +515,7 @@ public partial class Label : Base, ILabel
         }
     }
 
-    public void SetBackgroundTemplate(GameTexture texture, string fileName)
+    public void SetBackgroundTemplate(IGameTexture texture, string fileName)
     {
         if (texture == null && !string.IsNullOrWhiteSpace(fileName))
         {
@@ -796,11 +809,25 @@ public partial class Label : Base, ILabel
 
         var contentSize = GetContentSize();
 
+        var minimumSize = MinimumSize;
+
         var newWidth = contentSize.X + contentPadding.Left + contentPadding.Right;
-        newWidth = Math.Max(newWidth, MinimumSize.X);
+        newWidth = Math.Max(newWidth, minimumSize.X);
 
         var newHeight = contentSize.Y + contentPadding.Top + contentPadding.Bottom;
-        newHeight = Math.Max(newHeight, MinimumSize.Y);
+        newHeight = Math.Max(newHeight, minimumSize.Y);
+
+        var maximumSize = MaximumSize;
+
+        if (maximumSize.X > 0)
+        {
+            newWidth = Math.Min(maximumSize.X, newWidth);
+        }
+
+        if (maximumSize.Y > 0)
+        {
+            newHeight = Math.Min(maximumSize.Y, newHeight);
+        }
 
         return new Point(newWidth, newHeight);
     }

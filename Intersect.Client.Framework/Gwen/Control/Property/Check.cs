@@ -1,4 +1,6 @@
-﻿namespace Intersect.Client.Framework.Gwen.Control.Property;
+﻿using Intersect.Client.Framework.Gwen.Control.EventArguments;
+
+namespace Intersect.Client.Framework.Gwen.Control.Property;
 
 
 /// <summary>
@@ -17,12 +19,17 @@ public partial class Check : Base
     {
         Checkbox = new Checkbox(this);
         Checkbox.ShouldDrawBackground = false;
-        Checkbox.CheckChanged += OnValueChanged;
+        Checkbox.CheckChanged += OnCheckChanged;
         Checkbox.IsTabable = true;
         Checkbox.KeyboardInputEnabled = true;
         Checkbox.SetPosition(2, 1);
 
         Height = 18;
+    }
+
+    private void OnCheckChanged(ICheckbox checkbox, ValueChangedEventArgs<bool> args)
+    {
+        OnValueChanged((checkbox as Control.Base)!, args);
     }
 
     /// <summary>

@@ -20,6 +20,31 @@ public static partial class Strings
     private const string StringsFileName = "client_strings.json";
     private static char[] mQuantityTrimChars = new char[] { '.', '0' };
 
+    private static string[] _unitsBits = [string.Empty, "Ki", "Mi", "Gi", "Ti"];
+    private static string[] _unitsBytes = [string.Empty, "K", "M", "G", "T"];
+
+    public static string FormatBits(long quantity)
+    {
+        var log = quantity < 2 ? 0 : Math.Log2(quantity);
+        var offsetLog = Math.Max(0, Math.Floor(log - 3.3));
+        var unitIndex = (int)Math.Clamp(Math.Floor(offsetLog / 10), 0, _unitsBits.Length - 1);
+        var divisor = Math.Pow(2, unitIndex * 10);
+        var quotient = quantity / divisor;
+        var unitPrefix = _unitsBits[unitIndex];
+        return $"{quotient:0.##}{unitPrefix}B";
+    }
+
+    public static string FormatBytes(long quantity)
+    {
+        var log = quantity < 10 ? 0 : Math.Floor(Math.Log10(quantity));
+        var offsetLog = Math.Max(0, log - 1);
+        var unitIndex = (int)Math.Clamp(Math.Floor(offsetLog / 3), 0, _unitsBytes.Length - 1);
+        var divisor = Math.Pow(10, unitIndex * 3);
+        var quotient = quantity / divisor;
+        var unitPrefix = _unitsBytes[unitIndex];
+        return $"{quotient:0.##}{unitPrefix}B";
+    }
+
     public static string FormatQuantityAbbreviated(long value)
     {
         if (value == 0)
@@ -931,6 +956,45 @@ public static partial class Strings
     public partial struct Debug
     {
         [JsonProperty(NullValueHandling = NullValueHandling.Ignore)]
+        public static LocalizedString SectionGPUStatistics = @"GPU Statistics";
+
+        [JsonProperty(NullValueHandling = NullValueHandling.Ignore)]
+        public static LocalizedString SectionGPUAllocations = @"GPU Allocations";
+
+        [JsonProperty(NullValueHandling = NullValueHandling.Ignore)]
+        public static LocalizedString SectionSystemStatistics = @"System Statistics";
+
+        [JsonProperty(NullValueHandling = NullValueHandling.Ignore)]
+        public static LocalizedString RenderTargetAllocations = @"Render Target Allocations";
+
+        [JsonProperty(NullValueHandling = NullValueHandling.Ignore)]
+        public static LocalizedString TextureAllocations = @"Texture Allocations";
+
+        [JsonProperty(NullValueHandling = NullValueHandling.Ignore)]
+        public static LocalizedString TextureCount = @"Texture Assets";
+
+        [JsonProperty(NullValueHandling = NullValueHandling.Ignore)]
+        public static LocalizedString UsedVRAM = @"Used VRAM";
+
+        [JsonProperty(NullValueHandling = NullValueHandling.Ignore)]
+        public static LocalizedString FreeVRAM = @"Free VRAM";
+
+        [JsonProperty(NullValueHandling = NullValueHandling.Ignore)]
+        public static LocalizedString TotalVRAM = @"Total VRAM";
+
+        [JsonProperty(NullValueHandling = NullValueHandling.Ignore)]
+        public static LocalizedString FreeVirtualRAM = @"Free RAM (Virtual)";
+
+        [JsonProperty(NullValueHandling = NullValueHandling.Ignore)]
+        public static LocalizedString TotalVirtualRAM = @"Total RAM (Virtual)";
+
+        [JsonProperty(NullValueHandling = NullValueHandling.Ignore)]
+        public static LocalizedString FreePhysicalRAM = @"Free RAM (Physical)";
+
+        [JsonProperty(NullValueHandling = NullValueHandling.Ignore)]
+        public static LocalizedString TotalPhysicalRAM = @"Total RAM (Physical)";
+
+        [JsonProperty(NullValueHandling = NullValueHandling.Ignore)]
         public static LocalizedString ControlUnderCursor = @"Control Under Cursor";
 
         [JsonProperty(NullValueHandling = NullValueHandling.Ignore)]
@@ -992,6 +1056,12 @@ public static partial class Strings
 
         [JsonProperty(NullValueHandling = NullValueHandling.Ignore)]
         public static LocalizedString Title = @"Debug";
+
+        [JsonProperty(NullValueHandling = NullValueHandling.Ignore)]
+        public static LocalizedString TitleX = @"Debug #{0}";
+
+        [JsonProperty(NullValueHandling = NullValueHandling.Ignore)]
+        public static LocalizedString TabLabelSystem = @"System";
 
         [JsonProperty(NullValueHandling = NullValueHandling.Ignore)]
         public static LocalizedString TabLabelInfo = @"Info";
@@ -1190,6 +1260,9 @@ public static partial class Strings
 
         [JsonProperty(NullValueHandling = NullValueHandling.Ignore)]
         public static LocalizedString None = @"None";
+
+        [JsonProperty(NullValueHandling = NullValueHandling.Ignore)]
+        public static LocalizedString FpsLabelFormat = @"{0}fps";
     }
 
     public partial struct Guilds
@@ -1291,7 +1364,9 @@ public static partial class Strings
         public static LocalizedString Transfer = @"Transfer";
 
         [JsonProperty(NullValueHandling = NullValueHandling.Ignore)]
-        public static LocalizedString TransferPrompt = @"This action will completely transfer all ownership of your guild to {00} and you will lose your rank of {01}. If you are sure you want to hand over your guild enter '{02}' below.";
+        public static LocalizedString TransferToMemberPrompt = @"This action will completely transfer all ownership of your guild to \c{{#80ff80}}{00}\c{{}} and you will lose your rank of \c{{#ff9f40}}{01}\c{{}}.
+
+If you are sure you want to hand over your guild enter '\c{{#ff8080}}{02}\c{{}}' below.";
 
         [JsonProperty(NullValueHandling = NullValueHandling.Ignore)]
         public static LocalizedString TransferTitle = @"Transfer Guild";
@@ -1405,10 +1480,10 @@ public static partial class Strings
         public static LocalizedString AutoSizeToContentHeightOnChildResize = @"ASTH on Child Resize";
 
         [JsonProperty(NullValueHandling = NullValueHandling.Ignore)]
-        public static LocalizedString IsVisible = @"IsVisible";
+        public static LocalizedString IsVisibleInParent = @"IsVisibleInParent";
 
         [JsonProperty(NullValueHandling = NullValueHandling.Ignore)]
-        public static LocalizedString IsVisibleInParent = @"IsVisibleInParent";
+        public static LocalizedString IsVisibleInTree = @"IsVisibleInTree";
 
         [JsonProperty(NullValueHandling = NullValueHandling.Ignore)]
         public static LocalizedString IsDisabled = @"IsDisabled";
@@ -2031,6 +2106,9 @@ public static partial class Strings
 
         [JsonProperty(NullValueHandling = NullValueHandling.Ignore)]
         public static LocalizedString Fps90 = @"90";
+
+        [JsonProperty(NullValueHandling = NullValueHandling.Ignore)]
+        public static LocalizedString ShowFPSCounter = @"Show FPS Counter";
 
         [JsonProperty(NullValueHandling = NullValueHandling.Ignore)]
         public static LocalizedString Fullscreen = @"Fullscreen";

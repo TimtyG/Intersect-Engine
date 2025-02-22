@@ -97,10 +97,10 @@ public partial class Canvas : Base
         set => mNeedsRedraw = value;
     }
 
-    public override void Dispose()
+    protected override void Dispose(bool disposing)
     {
         ProcessDelayedDeletes();
-        base.Dispose();
+        base.Dispose(disposing);
     }
 
     /// <summary>
@@ -131,8 +131,6 @@ public partial class Canvas : Base
         var render = Skin.Renderer;
 
         render.Begin();
-
-        RecurseLayout(Skin);
 
         render.ClipRegion = Bounds;
 
@@ -223,7 +221,8 @@ public partial class Canvas : Base
 
         ProcessDelayedDeletes();
 
-        // Check has focus etc..
+        InvokeThreadQueue();
+
         RecurseLayout(Skin);
 
         // If we didn't have a next tab, cycle to the start.
@@ -410,7 +409,7 @@ public partial class Canvas : Base
             return false;
         }
 
-        if (!InputHandler.KeyboardFocus.IsVisible)
+        if (!InputHandler.KeyboardFocus.IsVisibleInTree)
         {
             return false;
         }

@@ -378,7 +378,7 @@ public partial class MapController : MapBase
     {
         foreach (var entity in GetEntitiesOnAllInstances())
         {
-            if (entity is Resource res && res.Base == resourceBase)
+            if (entity is Resource res && res.Descriptor == resourceBase)
             {
                 lock (res.EntityLock)
                 {
@@ -626,7 +626,7 @@ public partial class MapController : MapBase
         mInstances.Clear();
     }
     #endregion
-
+    
     /// <summary>
     /// Gets rid of any orphaned tile layers
     /// </summary>

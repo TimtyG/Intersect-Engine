@@ -9,6 +9,7 @@ using Intersect.Client.Interface.Game.DescriptionWindows;
 using Intersect.Client.Localization;
 using Intersect.Client.Networking;
 using Intersect.Configuration;
+using Intersect.Framework.Core;
 using Intersect.GameObjects;
 using Intersect.Utilities;
 
@@ -76,7 +77,7 @@ public partial class InventoryItem
         Pnl.Clicked += pnl_Clicked;
         Pnl.DoubleClicked += Pnl_DoubleClicked;
         EquipPanel = new ImagePanel(Pnl, "InventoryItemEquippedIcon");
-        EquipPanel.Texture = Graphics.Renderer.GetWhiteTexture();
+        EquipPanel.Texture = Graphics.Renderer.WhitePixel;
         EquipLabel = new Label(Pnl, "InventoryItemEquippedLabel");
         EquipLabel.IsHidden = true;
         EquipLabel.Text = Strings.Inventory.EquippedSymbol;
@@ -187,7 +188,7 @@ public partial class InventoryItem
 
         mMouseOver = true;
         mCanDrag = true;
-        if (Globals.InputManager.MouseButtonDown(MouseButton.Left))
+        if (Globals.InputManager.IsMouseButtonDown(MouseButton.Left))
         {
             mCanDrag = false;
 
@@ -358,7 +359,7 @@ public partial class InventoryItem
         {
             if (mMouseOver)
             {
-                if (!Globals.InputManager.MouseButtonDown(MouseButton.Left))
+                if (!Globals.InputManager.IsMouseButtonDown(MouseButton.Left))
                 {
                     mCanDrag = true;
                     mMouseX = -1;
@@ -484,7 +485,7 @@ public partial class InventoryItem
                 if (bagWindow.RenderBounds().IntersectsWith(dragRect))
                 {
                     var bagSlotComponents = bagWindow.Items.ToArray();
-                    var bagSlotLimit = Math.Min(Globals.Bag.Length, bagSlotComponents.Length);
+                    var bagSlotLimit = Math.Min(Globals.BagSlots.Length, bagSlotComponents.Length);
                     for (var bagSlotIndex = 0; bagSlotIndex < bagSlotLimit; bagSlotIndex++)
                     {
                         var bagSlotComponent = bagSlotComponents[bagSlotIndex];
@@ -517,7 +518,7 @@ public partial class InventoryItem
                 {
                     var bankSlotComponents = bankWindow.Items.ToArray();
                     var bankSlotLimit = Math.Min(
-                        Math.Min(Globals.Bank.Length, Globals.BankSlots),
+                        Math.Min(Globals.BankSlots.Length, Globals.BankSlotCount),
                         bankSlotComponents.Length
                     );
 

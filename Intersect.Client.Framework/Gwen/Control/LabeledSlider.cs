@@ -99,7 +99,7 @@ public partial class LabeledSlider : Base, ISmartAutoSizeToContents, INumericInp
         IsTabable = true;
     }
 
-    public GameTexture? BackgroundImage
+    public IGameTexture? BackgroundImage
     {
         get => _slider.BackgroundImage;
         set => _slider.BackgroundImage = value;
@@ -136,8 +136,8 @@ public partial class LabeledSlider : Base, ISmartAutoSizeToContents, INumericInp
 
     public bool IsValueInputEnabled
     {
-        get => _sliderValue.IsVisible;
-        set => _sliderValue.IsVisible = value;
+        get => _sliderValue.IsVisibleInTree;
+        set => _sliderValue.IsVisibleInTree = value;
     }
 
     public string? Label
@@ -259,12 +259,12 @@ public partial class LabeledSlider : Base, ISmartAutoSizeToContents, INumericInp
         set => _label.MinimumSize = value;
     }
 
-    public void SetDraggerImage(GameTexture? texture, ComponentState state)
+    public void SetDraggerImage(IGameTexture? texture, ComponentState state)
     {
         _slider.SetDraggerImage(texture, state);
     }
 
-    public GameTexture? GetDraggerImage(ComponentState state)
+    public IGameTexture? GetDraggerImage(ComponentState state)
     {
         return _slider.GetDraggerImage(state);
     }

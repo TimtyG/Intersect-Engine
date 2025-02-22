@@ -9,6 +9,7 @@ using Intersect.Client.Localization;
 using Intersect.Client.Networking;
 using Intersect.Core;
 using Intersect.Enums;
+using Intersect.Framework.Core;
 using Intersect.Framework.Reflection;
 using Intersect.GameObjects;
 using Intersect.GameObjects.Crafting;
@@ -452,9 +453,9 @@ public partial class CraftingWindow : Window
         }
     }
 
-    protected override void Prelayout(Framework.Gwen.Skin.Base skin)
+    protected override void DoPrelayout(Framework.Gwen.Skin.Base skin)
     {
-        base.Prelayout(skin);
+        base.DoPrelayout(skin);
 
         if (IsCrafting)
         {

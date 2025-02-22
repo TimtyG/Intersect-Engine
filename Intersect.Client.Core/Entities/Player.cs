@@ -22,6 +22,7 @@ using Intersect.Configuration;
 using Intersect.Core;
 using Intersect.Enums;
 using Intersect.Extensions;
+using Intersect.Framework.Core;
 using Intersect.Framework.Reflection;
 using Intersect.GameObjects;
 using Intersect.GameObjects.Maps;
@@ -294,7 +295,7 @@ public partial class Player : Entity, IPlayer
             }
         }
 
-        if (TargetBox == default && this == Globals.Me && Interface.Interface.GameUi != default)
+        if (TargetBox == default && this == Globals.Me && Interface.Interface.HasInGameUI)
         {
             // If for WHATEVER reason the box hasn't been created, create it.
             TargetBox = new EntityBox(Interface.Interface.GameUi.GameCanvas, EntityType.Player, null);
@@ -317,7 +318,7 @@ public partial class Player : Entity, IPlayer
         StatusWindow?.Update();
 
         // Hide our Guild window if we're not in a guild!
-        if (this == Globals.Me && string.IsNullOrEmpty(Guild) && Interface.Interface.GameUi != null)
+        if (this == Globals.Me && string.IsNullOrEmpty(Guild) && Interface.Interface.HasInGameUI)
         {
             Interface.Interface.GameUi.HideGuildWindow();
         }
@@ -362,7 +363,7 @@ public partial class Player : Entity, IPlayer
             }
         }
 
-        if (this == Globals.Me && TargetBox == null && Interface.Interface.GameUi != null)
+        if (this == Globals.Me && TargetBox == null && Interface.Interface.HasInGameUI)
         {
             TargetBox = new EntityBox(Interface.Interface.GameUi.GameCanvas, EntityType.Player, null);
             TargetBox.Hide();
@@ -427,22 +428,27 @@ public partial class Player : Entity, IPlayer
                     return;
                 }
 
-                if (args.Value is not NumericalSubmissionValue submissionValue)
+                var promptQuantity = 0;
+                switch (args.Value)
                 {
-                    return;
+                    case BooleanSubmissionValue booleanSubmission:
+                        promptQuantity = booleanSubmission.Value ? 1 : 0;
+                        break;
+
+                    case NumericalSubmissionValue numericalSubmission:
+                        promptQuantity = (int)Math.Round(numericalSubmission.Value);
+                        break;
                 }
 
-                var value = (int)Math.Round(submissionValue.Value);
-
-                if (value <= 0)
+                if (promptQuantity < 1)
                 {
                     return;
                 }
 
                 // Check if the item can be dropped in multiple quantities or if value is less than or equal to the quantity in the initial slot
-                if (!canDropMultiple || value <= quantity)
+                if (!canDropMultiple || promptQuantity <= quantity)
                 {
-                    PacketSender.SendDropItem(slotIndex, !canDropMultiple ? 1 : value);
+                    PacketSender.SendDropItem(slotIndex, !canDropMultiple ? 1 : promptQuantity);
                     return;
                 }
 
@@ -451,13 +457,13 @@ public partial class Player : Entity, IPlayer
 
                 // Send the drop item packet for the initial slot.
                 PacketSender.SendDropItem(slotIndex, quantity);
-                value -= quantity;
+                promptQuantity -= quantity;
                 _ = itemSlots.Remove(inventorySlot); // Remove the initial slot from the list of item slots
 
                 // Iterate through the remaining slots containing the item
                 foreach (var slot in itemSlots)
                 {
-                    var dropAmount = Math.Min(value, slot.Quantity);
+                    var dropAmount = Math.Min(promptQuantity, slot.Quantity);
 
                     if (dropAmount <= 0)
                     {
@@ -465,7 +471,7 @@ public partial class Player : Entity, IPlayer
                     }
 
                     PacketSender.SendDropItem(Inventory.IndexOf(slot), dropAmount);
-                    value -= dropAmount;
+                    promptQuantity -= dropAmount;
                 }
             }
         );
@@ -499,7 +505,7 @@ public partial class Player : Entity, IPlayer
         return (int)Math.Min(count, int.MaxValue);
     }
 
-    public static int GetQuantityOfItemInBank(Guid itemId) => GetQuantityOfItemIn(Globals.Bank, itemId);
+    public static int GetQuantityOfItemInBank(Guid itemId) => GetQuantityOfItemIn(Globals.BankSlots, itemId);
 
     public int GetQuantityOfItemInInventory(Guid itemId) => GetQuantityOfItemIn(Inventory, itemId);
 
@@ -847,7 +853,7 @@ public partial class Player : Entity, IPlayer
     )
     {
         // Permission Check for Guild Bank
-        if (Globals.GuildBank && !IsGuildBankDepositAllowed())
+        if (Globals.IsGuildBank && !IsGuildBankDepositAllowed())
         {
             ChatboxMsg.AddMessage(new ChatboxMsg(Strings.Guilds.NotAllowedDeposit.ToString(Globals.Me?.Guild), CustomColors.Alerts.Error, ChatMessageType.Bank));
             return false;
@@ -871,7 +877,7 @@ public partial class Player : Entity, IPlayer
         var sourceQuantity = GetQuantityOfItemInInventory(itemDescriptor.Id);
         var quantity = quantityHint < 0 ? sourceQuantity : quantityHint;
 
-        var targetSlots = Globals.Bank.ToArray();
+        var targetSlots = Globals.BankSlots.ToArray();
 
         var movableQuantity = Item.FindSpaceForItem(
             itemDescriptor.Id,
@@ -974,13 +980,13 @@ public partial class Player : Entity, IPlayer
     )
     {
         // Permission Check for Guild Bank
-        if (Globals.GuildBank && !IsGuildBankWithdrawAllowed())
+        if (Globals.IsGuildBank && !IsGuildBankWithdrawAllowed())
         {
             ChatboxMsg.AddMessage(new ChatboxMsg(Strings.Guilds.NotAllowedWithdraw.ToString(Globals.Me?.Guild), CustomColors.Alerts.Error, ChatMessageType.Bank));
             return false;
         }
 
-        slot ??= Globals.Bank[bankSlotIndex];
+        slot ??= Globals.BankSlots[bankSlotIndex];
         if (!ItemBase.TryGet(slot.ItemId, out var itemDescriptor))
         {
             ApplicationContext.Context.Value?.Logger.LogWarning($"Tried to move item that does not exist from slot {bankSlotIndex}: {itemDescriptor.Id}");
@@ -1132,7 +1138,7 @@ public partial class Player : Entity, IPlayer
 
     public void TryRetrieveItemFromBag(int bagSlotIndex, int inventorySlotIndex)
     {
-        var bagSlot = Globals.Bag[bagSlotIndex];
+        var bagSlot = Globals.BagSlots[bagSlotIndex];
         if (bagSlot == default)
         {
             return;
@@ -1578,10 +1584,15 @@ public partial class Player : Entity, IPlayer
             castInput = slotIndex;
         }
 
-        // ReSharper disable once InvertIf
-        if (0 <= castInput && castInput < Interface.Interface.GameUi?.Hotbar?.Items?.Count && mLastHotbarUseTime[castInput] < Timing.Global.Milliseconds)
+        if (!Interface.Interface.HasInGameUI)
         {
-            Interface.Interface.GameUi?.Hotbar?.Items?[castInput]?.Activate();
+            return;
+
+        }
+        // ReSharper disable once InvertIf
+        if (0 <= castInput && castInput < Interface.Interface.GameUi.Hotbar?.Items?.Count && mLastHotbarUseTime[castInput] < Timing.Global.Milliseconds)
+        {
+            Interface.Interface.GameUi.Hotbar?.Items?[castInput]?.Activate();
             mLastHotbarUseTime[castInput] = Timing.Global.Milliseconds + mHotbarUseDelay;
         }
     }
@@ -1863,7 +1874,7 @@ public partial class Player : Entity, IPlayer
 
     private static void ToggleTargetContextMenu(Entity en)
     {
-        if (Globals.InputManager.MouseButtonDown(MouseButton.Right))
+        if (Globals.InputManager.IsMouseButtonDown(MouseButton.Right))
         {
             Interface.Interface.GameUi.TargetContextMenu.ToggleHidden(en);
         }
@@ -2699,7 +2710,7 @@ public partial class Player : Entity, IPlayer
         if (backgroundColor != Color.Transparent)
         {
             Graphics.DrawGameTexture(
-                Graphics.Renderer.GetWhiteTexture(),
+                Graphics.Renderer.WhitePixel,
                 new FloatRect(0, 0, 1, 1),
                 new FloatRect(x - textSize.X / 2f - 4, y, textSize.X + 8, textSize.Y),
                 backgroundColor

@@ -1,6 +1,7 @@
 using System.Collections.Concurrent;
 using Intersect.Core;
 using Intersect.Enums;
+using Intersect.Framework.Core;
 using Intersect.Framework.Core.GameObjects.Variables;
 using Intersect.GameObjects;
 using Intersect.GameObjects.Animations;
@@ -725,7 +726,14 @@ public static partial class PacketSender
         }
 
         //Now send the cached game data that we send to all clients
-        client.Send(CachedGameDataPacket);
+        if (!client.Send(CachedGameDataPacket))
+        {
+            ApplicationContext.CurrentContext.Logger.LogError(
+                "Failed to send cached game data packet to {ClientId} ({ClientType})",
+                client.Id,
+                client.IsEditor ? "editor" : "player"
+            );
+        }
     }
 
     //GameDataPacket

@@ -1,14 +1,14 @@
 using Intersect.Client.Framework.Graphics;
 using Intersect.Client.Framework.Gwen.Control.EventArguments;
+using Intersect.Framework.Eventing;
 using Newtonsoft.Json.Linq;
 
 namespace Intersect.Client.Framework.Gwen.Control;
 
-
 /// <summary>
 ///     CheckBox with label.
 /// </summary>
-public partial class LabeledCheckBox : Base, IAutoSizeToContents, ITextContainer
+public partial class LabeledCheckBox : Base, IAutoSizeToContents, ICheckbox, ITextContainer
 {
     private readonly Checkbox _checkbox;
 
@@ -135,22 +135,22 @@ public partial class LabeledCheckBox : Base, IAutoSizeToContents, ITextContainer
     /// <summary>
     ///     Invoked when the control has been checked.
     /// </summary>
-    public event GwenEventHandler<EventArgs>? Checked;
+    public event EventHandler<ICheckbox, EventArgs>? Checked;
 
     /// <summary>
     ///     Invoked when the control has been unchecked.
     /// </summary>
-    public event GwenEventHandler<EventArgs>? Unchecked;
+    public event EventHandler<ICheckbox, EventArgs>? Unchecked;
 
     /// <summary>
     ///     Invoked when the control's check has been changed.
     /// </summary>
-    public event GwenEventHandler<EventArgs>? CheckChanged;
+    public event EventHandler<ICheckbox, ValueChangedEventArgs<bool>>? CheckChanged;
 
     /// <summary>
     ///     Handler for CheckChanged event.
     /// </summary>
-    protected virtual void OnCheckChanged(Base control, EventArgs args)
+    protected virtual void OnCheckChanged(ICheckbox sender, ValueChangedEventArgs<bool> args)
     {
         if (_checkbox.IsChecked)
         {
@@ -161,7 +161,7 @@ public partial class LabeledCheckBox : Base, IAutoSizeToContents, ITextContainer
             Unchecked?.Invoke(this, EventArgs.Empty);
         }
 
-        CheckChanged?.Invoke(this, EventArgs.Empty);
+        CheckChanged?.Invoke(this, args);
     }
 
     public override Point GetChildrenSize()
@@ -170,17 +170,12 @@ public partial class LabeledCheckBox : Base, IAutoSizeToContents, ITextContainer
         return childrenSize;
     }
 
-    public override bool SizeToChildren(bool resizeX = true, bool resizeY = true, bool recursive = false)
-    {
-        return base.SizeToChildren(resizeX, resizeY, recursive);
-    }
-
     public void SetCheckSize(int w, int h)
     {
         _checkbox.SetSize(w, h);
     }
 
-    public void SetImage(GameTexture texture, string fileName, Checkbox.ControlState state)
+    public void SetImage(IGameTexture texture, string fileName, Checkbox.ControlState state)
     {
         _checkbox.SetImage(texture, fileName, state);
     }

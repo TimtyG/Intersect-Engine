@@ -15,6 +15,7 @@ using Intersect.Client.Maps;
 using Intersect.Client.Spells;
 using Intersect.Core;
 using Intersect.Enums;
+using Intersect.Framework.Core;
 using Intersect.Framework.Core.GameObjects.Animations;
 using Intersect.GameObjects;
 using Intersect.GameObjects.Animations;
@@ -192,13 +193,13 @@ public partial class Entity : IEntity
     IReadOnlyDictionary<Stat, int> IEntity.Stats =>
         Enum.GetValues<Stat>().ToDictionary(stat => stat, stat => Stat[(int)stat]);
 
-    public GameTexture? Texture { get; set; }
+    public IGameTexture? Texture { get; set; }
 
     #region "Animation Textures and Timing"
 
     public SpriteAnimations SpriteAnimation { get; set; } = SpriteAnimations.Normal;
 
-    public Dictionary<SpriteAnimations, GameTexture> AnimatedTextures { get; set; } = [];
+    public Dictionary<SpriteAnimations, IGameTexture> AnimatedTextures { get; set; } = [];
 
     public int SpriteFrame { get; set; } = 0;
 
@@ -450,21 +451,28 @@ public partial class Entity : IEntity
         {
             if (Id == Globals.Me.Id)
             {
-                if (Interface.Interface.GameUi == null)
-                {
-                    ApplicationContext.Context.Value?.Logger.LogWarning($"'{nameof(Interface.Interface.GameUi)}' is null.");
-                }
-                else
-                {
-                    if (Interface.Interface.GameUi.PlayerStatusWindow == null)
+                Interface.Interface.EnqueueInGame(
+                    gameInterface =>
                     {
-                        ApplicationContext.Context.Value?.Logger.LogWarning($"'{nameof(Interface.Interface.GameUi.PlayerStatusWindow)}' is null.");
-                    }
-                    else
-                    {
-                        Interface.Interface.GameUi.PlayerStatusWindow.ShouldUpdateStatuses = true;
-                    }
-                }
+                        if (gameInterface.PlayerStatusWindow == null)
+                        {
+                            ApplicationContext.Context.Value?.Logger.LogWarning(
+                                $"'{nameof(gameInterface.PlayerStatusWindow)}' is null."
+                            );
+                        }
+                        else
+                        {
+                            gameInterface.PlayerStatusWindow.ShouldUpdateStatuses = true;
+                        }
+                    },
+                    (entityId, entityName) => ApplicationContext.CurrentContext.Logger.LogWarning(
+                        "Tried to load entity {EntityId} ({EntityName}) from packet before in-game UI was ready",
+                        entityId,
+                        entityName
+                    ),
+                    packet.EntityId,
+                    packet.Name
+                );
             }
             else if (Id != Guid.Empty && Id == Globals.Me.TargetId)
             {
@@ -1379,7 +1387,7 @@ public partial class Entity : IEntity
         }
 
         // Paperdoll textures and Frames.
-        GameTexture? paperdollTex = null;
+        IGameTexture? paperdollTex = null;
         var spriteFrames = SpriteFrames;
 
         // Extract filename without it's extension.
@@ -1537,7 +1545,7 @@ public partial class Entity : IEntity
         if (backgroundColor != Color.Transparent)
         {
             Graphics.DrawGameTexture(
-                Graphics.Renderer.GetWhiteTexture(), new FloatRect(0, 0, 1, 1),
+                Graphics.Renderer.WhitePixel, new FloatRect(0, 0, 1, 1),
                 new FloatRect(x - textSize.X / 2f - 4, y, textSize.X + 8, textSize.Y), backgroundColor
             );
         }
@@ -1600,7 +1608,7 @@ public partial class Entity : IEntity
         if (backgroundColor != Color.Transparent)
         {
             Graphics.DrawGameTexture(
-                Graphics.Renderer.GetWhiteTexture(), new FloatRect(0, 0, 1, 1),
+                Graphics.Renderer.WhitePixel, new FloatRect(0, 0, 1, 1),
                 new FloatRect(x - textSize.X / 2f - 4, y, textSize.X + 8, textSize.Y), backgroundColor
             );
         }
@@ -1727,7 +1735,7 @@ public partial class Entity : IEntity
         }
     }
 
-    public GameTexture GetBoundingHpBarTexture()
+    public IGameTexture GetBoundingHpBarTexture()
     {
         return GameTexture.GetBoundingTexture(
             BoundsComparison.Height,
@@ -2196,7 +2204,7 @@ public partial class Entity : IEntity
         }
     }
 
-    protected virtual bool TryGetAnimationTexture(string textureName, SpriteAnimations spriteAnimation, string textureOverride, out GameTexture texture)
+    protected virtual bool TryGetAnimationTexture(string textureName, SpriteAnimations spriteAnimation, string textureOverride, out IGameTexture texture)
     {
         var baseFilename = Path.GetFileNameWithoutExtension(textureName);
         var extension = Path.GetExtension(textureName);

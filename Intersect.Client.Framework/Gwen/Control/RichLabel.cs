@@ -1,6 +1,8 @@
+using System.Text.RegularExpressions;
 using Intersect.Client.Framework.File_Management;
 using Intersect.Client.Framework.GenericClasses;
 using Intersect.Client.Framework.Graphics;
+using Intersect.Client.Utilities;
 using Intersect.Core;
 using Microsoft.Extensions.Logging;
 using Newtonsoft.Json.Linq;
@@ -32,6 +34,16 @@ public partial class RichLabel : Base
         {
             _font = value;
             _fontInfo = value is { } font ? $"{font.GetName()},{font.GetSize()}" : null;
+        }
+    }
+
+    public string? Text
+    {
+        get => string.Join('\n', _textBlocks.Select(block => block.Text));
+        set
+        {
+            ClearText();
+            AddText(value ?? string.Empty, default(Color));
         }
     }
 
@@ -89,7 +101,7 @@ public partial class RichLabel : Base
     /// </summary>
     /// <param name="text">Text to add</param>
     /// <param name="template">Label to use as a template</param>
-    public void AddText(string text, Label? template)
+    public void AddText(string? text, Label? template)
     {
         AddText(
             text,
@@ -99,7 +111,7 @@ public partial class RichLabel : Base
         );
     }
 
-    public void AddText(string text, Color? color) => AddText(text, color, Alignments.Left);
+    public void AddText(string? text, Color? color) => AddText(text, color, Alignments.Left);
 
     /// <summary>
     ///     Adds text to the control.
@@ -108,10 +120,21 @@ public partial class RichLabel : Base
     /// <param name="color">Text color.</param>
     /// <param name="alignment"></param>
     /// <param name="font">Font to use.</param>
-    public void AddText(string text, Color? color, Alignments alignment, GameFont? font = default)
+    public void AddText(string? text, Color? color, Alignments alignment, GameFont? font = default)
     {
         if (string.IsNullOrEmpty(text))
         {
+            return;
+        }
+
+        if (text.Contains("\\c"))
+        {
+            var colorizedSegments = TextColorParser.Parse(text, color);
+            foreach (var segment in colorizedSegments)
+            {
+                AddText(segment.Text, segment.Color ?? color, alignment, font);
+            }
+
             return;
         }
 
@@ -229,22 +252,6 @@ public partial class RichLabel : Base
         }
 
         Invalidate();
-    }
-
-    /// <summary>
-    ///     Resizes the control to fit its children.
-    /// </summary>
-    /// <param name="resizeX">Determines whether to change control's width.</param>
-    /// <param name="resizeY">Determines whether to change control's height.</param>
-    /// <param name="recursive"></param>
-    /// <returns>
-    ///     True if bounds changed.
-    /// </returns>
-    public override bool SizeToChildren(bool resizeX = true, bool resizeY = true, bool recursive = false)
-    {
-        InvalidateRebuild();
-
-        return base.SizeToChildren(resizeX: resizeX, resizeY: resizeY, recursive: recursive);
     }
 
     public void ForceImmediateRebuild() => Rebuild();
@@ -502,9 +509,9 @@ public partial class RichLabel : Base
             }
         }
 
-        Rebuilt?.Invoke(this, EventArgs.Empty);
         var resizeX = !Dock.HasFlag(Pos.Fill) || _dockFillSize == default || _dockFillSize.X != Width;
         base.SizeToChildren(resizeX: resizeX, resizeY: true);
+        Rebuilt?.Invoke(this, EventArgs.Empty);
     }
 
     // protected override void OnBoundsChanged(Rectangle oldBounds, Rectangle newBounds)

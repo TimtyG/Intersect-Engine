@@ -1,6 +1,8 @@
 using Intersect.Client.Framework.File_Management;
 using Intersect.Client.Framework.Graphics;
+using Intersect.Client.Framework.Gwen.Control.EventArguments;
 using Intersect.Client.Framework.Input;
+using Intersect.Framework.Eventing;
 using Newtonsoft.Json.Linq;
 
 namespace Intersect.Client.Framework.Gwen.Control;
@@ -9,7 +11,7 @@ namespace Intersect.Client.Framework.Gwen.Control;
 /// <summary>
 ///     CheckBox control.
 /// </summary>
-public partial class Checkbox : Button
+public partial class Checkbox : Button, ICheckbox
 {
 
     public enum ControlState
@@ -27,22 +29,22 @@ public partial class Checkbox : Button
 
     private bool mChecked;
 
-    private GameTexture mCheckedDisabledImage;
+    private IGameTexture mCheckedDisabledImage;
 
     private string mCheckedDisabledImageFilename;
 
-    private GameTexture mCheckedNormalImage;
+    private IGameTexture mCheckedNormalImage;
 
     private string mCheckedNormalImageFilename;
 
     //Sound Effects
     private string mCheckSound;
 
-    private GameTexture mDisabledImage;
+    private IGameTexture mDisabledImage;
 
     private string mDisabledImageFilename;
 
-    private GameTexture mNormalImage;
+    private IGameTexture mNormalImage;
 
     private string mNormalImageFilename;
 
@@ -75,7 +77,7 @@ public partial class Checkbox : Button
             }
 
             mChecked = value;
-            OnCheckChanged();
+            OnCheckChanged(value);
         }
     }
 
@@ -172,42 +174,39 @@ public partial class Checkbox : Button
     /// <summary>
     ///     Invoked when the checkbox has been checked.
     /// </summary>
-    public event GwenEventHandler<EventArgs> Checked;
+    public event EventHandler<ICheckbox, EventArgs>? Checked;
 
     /// <summary>
     ///     Invoked when the checkbox has been unchecked.
     /// </summary>
-    public event GwenEventHandler<EventArgs> UnChecked;
+    public event EventHandler<ICheckbox, EventArgs>? Unchecked;
 
     /// <summary>
     ///     Invoked when the checkbox state has been changed.
     /// </summary>
-    public event GwenEventHandler<EventArgs> CheckChanged;
+    public event EventHandler<ICheckbox, ValueChangedEventArgs<bool>>? CheckChanged;
 
     /// <summary>
     ///     Handler for CheckChanged event.
     /// </summary>
-    protected virtual void OnCheckChanged()
+    protected virtual void OnCheckChanged(bool isChecked)
     {
-        if (IsChecked)
+        if (isChecked)
         {
-            if (Checked != null)
-            {
-                Checked.Invoke(this, EventArgs.Empty);
-            }
+            Checked?.Invoke(this, EventArgs.Empty);
         }
         else
         {
-            if (UnChecked != null)
-            {
-                UnChecked.Invoke(this, EventArgs.Empty);
-            }
+            Unchecked?.Invoke(this, EventArgs.Empty);
         }
 
-        if (CheckChanged != null)
-        {
-            CheckChanged.Invoke(this, EventArgs.Empty);
-        }
+        CheckChanged?.Invoke(
+            this,
+            new ValueChangedEventArgs<bool>
+            {
+                Value = isChecked, OldValue = !isChecked
+            }
+        );
     }
 
     /// <summary>
@@ -242,7 +241,7 @@ public partial class Checkbox : Button
         base.OnMouseClicked(mouseButton, mousePosition, userAction);
     }
 
-    public void SetImage(GameTexture texture, string fileName, ControlState state)
+    public void SetImage(IGameTexture texture, string fileName, ControlState state)
     {
         switch (state)
         {
@@ -271,7 +270,7 @@ public partial class Checkbox : Button
         }
     }
 
-    public GameTexture GetImage(ControlState state)
+    public IGameTexture GetImage(ControlState state)
     {
         switch (state)
         {

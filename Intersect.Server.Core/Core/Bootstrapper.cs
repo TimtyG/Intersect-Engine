@@ -7,7 +7,7 @@ using Intersect.Config;
 using Intersect.Core;
 using Intersect.Factories;
 using Intersect.Framework.Logging;
-using Intersect.Framework.Reflection;
+using Intersect.Framework.SystemInformation;
 using Intersect.GameObjects;
 using Intersect.GameObjects.Events;
 using Intersect.GameObjects.Maps;
@@ -26,9 +26,6 @@ using Intersect.Threading;
 using Intersect.Utilities;
 using Microsoft.Extensions.Logging;
 using Serilog;
-using Serilog.Core;
-using Serilog.Events;
-using Serilog.Extensions.Logging;
 
 namespace Intersect.Server.Core;
 
@@ -45,7 +42,7 @@ internal static class Bootstrapper
 
     public static ILockingActionQueue MainThread { get; private set; }
 
-    public static void Start(params string[] args)
+    public static void Start(Assembly entryAssembly, params string[] args)
     {
         (string[] Args, Parser Parser, ServerCommandLineOptions CommandLineOptions) parsedArguments =
             ParseCommandLineArgs(args);
@@ -66,12 +63,13 @@ internal static class Bootstrapper
 
         Console.WriteLine("Pre-context setup finished.");
 
-        var executingAssembly = Assembly.GetExecutingAssembly();
-        var (_, logger) = new LoggerConfiguration().CreateLoggerForIntersect(
-            executingAssembly,
+        var (loggerFactory, logger) = new LoggerConfiguration().CreateLoggerForIntersect(
+            entryAssembly,
             "Server",
             LoggingOptions.LoggingLevelSwitch
         );
+
+        PlatformStatistics.Logger = loggerFactory.CreateLogger<PlatformStatistics>();
 
         var packetTypeRegistry = new PacketTypeRegistry(logger, typeof(SharedConstants).Assembly);
         if (!packetTypeRegistry.TryRegisterBuiltIn())

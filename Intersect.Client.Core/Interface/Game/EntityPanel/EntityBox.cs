@@ -10,6 +10,7 @@ using Intersect.Client.Localization;
 using Intersect.Configuration;
 using Intersect.Core;
 using Intersect.Enums;
+using Intersect.Framework.Core;
 using Intersect.GameObjects;
 using Intersect.Utilities;
 using Microsoft.Extensions.Logging;
@@ -892,14 +893,13 @@ public partial class EntityBox
     public void Dispose()
     {
         EntityWindow.Hide();
-        Interface.GameUi.GameCanvas.RemoveChild(EntityWindow, false);
-        EntityWindow.Dispose();
+        EntityWindow.Canvas?.RemoveChild(EntityWindow, true);
     }
 
     public bool IsVisible
     {
-        get => EntityWindow.IsVisible;
-        set => EntityWindow.IsVisible = value;
+        get => EntityWindow.IsVisibleInTree;
+        set => EntityWindow.IsVisibleInTree = value;
     }
 
     public void Hide()

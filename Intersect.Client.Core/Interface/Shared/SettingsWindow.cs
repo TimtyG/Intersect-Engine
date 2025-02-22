@@ -12,6 +12,7 @@ using Intersect.Client.General;
 using Intersect.Client.Localization;
 using Intersect.Config;
 using Intersect.Core;
+using Intersect.Framework.Core;
 using Intersect.Utilities;
 using Microsoft.Extensions.Logging;
 using static Intersect.Client.Framework.File_Management.GameContentManager;
@@ -73,6 +74,7 @@ public partial class SettingsWindow : Window
     private readonly ScrollControl _videoContainer;
     private readonly LabeledComboBox _resolutionList;
     private readonly LabeledComboBox _fpsList;
+    private readonly LabeledCheckBox _showFPSCounterCheckbox;
     private readonly LabeledSlider _worldScale;
     private readonly LabeledCheckBox _fullscreenCheckbox;
     private readonly LabeledCheckBox _lightingEnabledCheckbox;
@@ -371,7 +373,7 @@ public partial class SettingsWindow : Window
             TextPadding = new Padding(8, 4, 0, 4),
         };
 
-        var availableVideoModes = Graphics.Renderer?.GetValidVideoModes().ToArray() ?? [];
+        var availableVideoModes = (Graphics.Renderer?.ValidVideoModes).ToArray() ?? [];
         for (var videoModeIndex = 0; videoModeIndex < availableVideoModes.Length; videoModeIndex++)
         {
             var availableVideoMode = availableVideoModes[videoModeIndex];
@@ -395,6 +397,14 @@ public partial class SettingsWindow : Window
         _ = _fpsList.AddItem(label: Strings.Settings.Fps90);
         _ = _fpsList.AddItem(label: Strings.Settings.Fps120);
         _ = _fpsList.AddItem(label: Strings.Settings.UnlimitedFps);
+
+        _showFPSCounterCheckbox = new LabeledCheckBox(parent: _videoContainer, name: nameof(_showFPSCounterCheckbox))
+        {
+            Dock = Pos.Top,
+            Font = _defaultFont,
+            Text = Strings.Settings.ShowFPSCounter,
+        };
+        _showFPSCounterCheckbox.CheckChanged += ShowFPSCounterCheckboxOnCheckChanged;
 
         // Video Settings - Fullscreen Checkbox.
         _fullscreenCheckbox = new LabeledCheckBox(parent: _videoContainer, name: nameof(_fullscreenCheckbox))
@@ -502,7 +512,8 @@ public partial class SettingsWindow : Window
 
         // Keybinding Settings - Controls
         var row = 0;
-        foreach (var control in (_keybindingEditControls ?? Controls.ActiveControls).Mappings.Keys)
+        var controls = (_keybindingEditControls ?? Controls.ActiveControls).Mappings.Keys.ToArray();
+        foreach (var control in controls)
         {
             AddControlKeybindRow(control: control, row: ref row, keyButtons: out _);
         }
@@ -547,6 +558,11 @@ public partial class SettingsWindow : Window
             CreateBottomBar(this);
     }
 
+    private static void ShowFPSCounterCheckboxOnCheckChanged(ICheckbox fpsCounterCheckbox, ValueChangedEventArgs<bool> args)
+    {
+        Interface.ShowFPSPanel = args.Value;
+    }
+
     protected override void EnsureInitialized()
     {
         LoadJsonUi(stage: UI.Shared, resolution: Graphics.Renderer?.GetResolutionString());
@@ -577,7 +593,7 @@ public partial class SettingsWindow : Window
             Alignment = [Alignments.Left, Alignments.CenterV],
             AutoSizeToContents = true,
             Font = _defaultFont,
-            IsVisible = false,
+            IsVisibleInTree = false,
             MinimumSize = new Point(x: 96, y: 24),
             Padding = new Padding(horizontal: 16, vertical: 2),
             Text = Strings.Settings.Restore,
@@ -631,7 +647,7 @@ public partial class SettingsWindow : Window
     {
         if (_controlsTab.IsTabActive)
         {
-            _restoreDefaultsButton.IsVisible = true;
+            _restoreDefaultsButton.IsVisibleInTree = true;
 
             bool controlsAdded = false;
 
@@ -660,7 +676,7 @@ public partial class SettingsWindow : Window
         }
         else
         {
-            _restoreDefaultsButton.IsVisible = false;
+            _restoreDefaultsButton.IsVisibleInTree = false;
         }
     }
 
@@ -916,7 +932,7 @@ public partial class SettingsWindow : Window
 
         // _uiScale.Value = Globals.Database.UIScale;
 
-        if (Graphics.Renderer?.GetValidVideoModes().Count > 0)
+        if ((Graphics.Renderer?.ValidVideoModes).Count > 0)
         {
             if (Graphics.Renderer.HasOverrideResolution)
             {
@@ -932,6 +948,8 @@ public partial class SettingsWindow : Window
                 _resolutionList.SelectByUserData(Globals.Database.TargetResolution);
             }
         }
+
+        _showFPSCounterCheckbox.IsChecked = Globals.Database.ShowFPSCounter;
 
         switch (Globals.Database.TargetFps)
         {
@@ -1134,6 +1152,8 @@ public partial class SettingsWindow : Window
             shouldReset = true;
             Globals.Database.TargetFps = newFps;
         }
+
+        Globals.Database.ShowFPSCounter = _showFPSCounterCheckbox.IsChecked;
 
         // Audio Settings.
         Globals.Database.MusicVolume = (int)_musicSlider.Value;

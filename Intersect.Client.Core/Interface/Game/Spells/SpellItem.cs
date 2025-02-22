@@ -6,6 +6,7 @@ using Intersect.Client.Framework.Input;
 using Intersect.Client.General;
 using Intersect.Client.Interface.Game.DescriptionWindows;
 using Intersect.Configuration;
+using Intersect.Framework.Core;
 using Intersect.GameObjects;
 using Intersect.Utilities;
 
@@ -114,7 +115,7 @@ public partial class SpellItem
 
         mMouseOver = true;
         mCanDrag = true;
-        if (Globals.InputManager.MouseButtonDown(MouseButton.Left))
+        if (Globals.InputManager.IsMouseButtonDown(MouseButton.Left))
         {
             mCanDrag = false;
 
@@ -205,7 +206,7 @@ public partial class SpellItem
         {
             if (mMouseOver)
             {
-                if (!Globals.InputManager.MouseButtonDown(MouseButton.Left))
+                if (!Globals.InputManager.IsMouseButtonDown(MouseButton.Left))
                 {
                     mCanDrag = true;
                     mMouseX = -1;

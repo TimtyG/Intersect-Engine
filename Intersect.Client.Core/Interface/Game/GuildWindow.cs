@@ -21,15 +21,15 @@ partial class GuildWindow : Window
     private readonly Button _buttonAdd;
     private readonly Button _buttonLeave;
     private readonly Button _buttonAddPopup;
-    private readonly Framework.Gwen.Control.Menu _contextMenu;
+    private readonly ContextMenu _contextMenu;
     private readonly MenuItem _privateMessageOption;
     private readonly MenuItem[] _promoteOptions;
     private readonly MenuItem[] _demoteOptions;
     private readonly MenuItem _kickOption;
     private readonly MenuItem _transferOption;
 
-    private readonly bool _addButtonUsed;
-    private readonly bool _addPopupButtonUsed;
+    private bool _addButtonUsed;
+    private bool _addPopupButtonUsed;
     private GuildMember? _selectedMember;
 
     public GuildWindow(Canvas gameCanvas) : base(gameCanvas, Globals.Me?.Guild, false, nameof(GuildWindow))
@@ -53,9 +53,10 @@ partial class GuildWindow : Window
         };
         _buttonAdd.Clicked += (s, e) =>
         {
-            if (_textboxSearch.Text.Trim().Length >= 3)
+            var searchText = _textboxSearch.Text?.Trim();
+            if (searchText is { Length: >=3 })
             {
-                PacketSender.SendInviteGuild(_textboxSearch.Text);
+                PacketSender.SendInviteGuild(searchText);
             }
         };
 
@@ -114,7 +115,7 @@ partial class GuildWindow : Window
         #region Context Menu Options
 
         // Context Menu
-        _contextMenu = new Framework.Gwen.Control.Menu(gameCanvas, "GuildContextMenu")
+        _contextMenu = new ContextMenu(gameCanvas, "GuildContextMenu")
         {
             IsHidden = true,
             IconMarginDisabled = true
@@ -122,7 +123,7 @@ partial class GuildWindow : Window
 
         //Add Context Menu Options
         //TODO: Is this a memory leak?
-        _contextMenu.Children.Clear();
+        _contextMenu.ClearChildren();
 
         // Private Message
         _privateMessageOption = _contextMenu.AddItem(Strings.Guilds.PM);
@@ -161,9 +162,6 @@ partial class GuildWindow : Window
         _transferOption.Clicked += transferOption_Clicked;
 
         #endregion
-
-        _addButtonUsed = !_buttonAdd.IsHidden;
-        _addPopupButtonUsed = !_buttonAddPopup.IsHidden;
     }
 
     protected override void EnsureInitialized()
@@ -172,6 +170,9 @@ partial class GuildWindow : Window
 
         _contextMenu.LoadJsonUi(GameContentManager.UI.InGame, Graphics.Renderer?.GetResolutionString());
         LoadJsonUi(GameContentManager.UI.InGame, Graphics.Renderer?.GetResolutionString());
+
+        _addButtonUsed = !_buttonAdd.IsHidden;
+        _addPopupButtonUsed = !_buttonAddPopup.IsHidden;
     }
 
     //Methods
@@ -325,8 +326,10 @@ partial class GuildWindow : Window
             _contextMenu.AddChild(_transferOption);
         }
 
-        _ = _contextMenu.SizeToChildren();
-        _contextMenu.Open(Framework.Gwen.Pos.None);
+        if (_contextMenu.Children.Count > 0)
+        {
+            _contextMenu.Open(Framework.Gwen.Pos.None);
+        }
     }
 
     #endregion
@@ -448,7 +451,7 @@ partial class GuildWindow : Window
 
         _ = new InputBox(
             Strings.Guilds.TransferTitle,
-            Strings.Guilds.TransferPrompt.ToString(_selectedMember?.Name, rank.Title, Globals.Me?.Guild),
+            Strings.Guilds.TransferToMemberPrompt.ToString(_selectedMember?.Name, rank.Title, Globals.Me?.Guild),
             InputType.TextInput,
             userData: _selectedMember,
             onSubmit: (sender, args) =>

@@ -6,7 +6,6 @@ using Newtonsoft.Json.Linq;
 
 namespace Intersect.Client.Framework.Gwen.Control;
 
-
 /// <summary>
 ///     Popup menu.
 /// </summary>
@@ -15,7 +14,7 @@ public partial class Menu : ScrollControl
 
     private string mBackgroundTemplateFilename;
 
-    private GameTexture mBackgroundTemplateTex;
+    private IGameTexture mBackgroundTemplateTex;
 
     private bool mDeleteOnClose;
 
@@ -93,25 +92,42 @@ public partial class Menu : ScrollControl
     ///     Opens the menu.
     /// </summary>
     /// <param name="pos">Unused.</param>
-    public void Open(Pos pos)
+    public void Open(Pos pos) => RunOnMainThread(Open, this, pos);
+
+    private static void Open(Menu @this, Pos position)
     {
-        IsHidden = false;
-        BringToFront();
+        @this.IsVisibleInParent = true;
+        @this.BringToFront();
+
         var mouse = Input.InputHandler.MousePosition;
 
-        var x = mouse.X;
-        var y = mouse.Y;
-        if (x + Width > Canvas.Width)
+        // Subtract a few pixels to it's absolutely clear the mouse is on a menu item
+        var x = mouse.X - 4;
+        var y = mouse.Y - 4;
+
+        @this.OnPositioningBeforeOpen();
+
+        if (@this.Canvas is { } canvas)
         {
-            x -= Width;
+            var canvasSize = canvas.Size;
+            var size = @this.Size;
+            x = Math.Min(x, Math.Max(0, canvasSize.X - size.X));
+            y = Math.Min(y, Math.Max(0, canvasSize.Y - size.Y));
         }
 
-        if (y + Height > Canvas.Height)
-        {
-            y -= Height;
-        }
+        @this.SetPosition(x, y);
 
-        SetPosition(x, y);
+        @this.OnOpen();
+    }
+
+    protected virtual void OnPositioningBeforeOpen()
+    {
+
+    }
+
+    protected virtual void OnOpen()
+    {
+
     }
 
     /// <summary>
@@ -164,7 +180,7 @@ public partial class Menu : ScrollControl
     /// <returns>Newly created control.</returns>
     public virtual MenuItem AddItem(
         string text,
-        GameTexture? iconTexture,
+        IGameTexture? iconTexture,
         string? textureFilename = default,
         string? accelerator = default,
         GameFont? font = default
@@ -294,24 +310,25 @@ public partial class Menu : ScrollControl
         divider.Margin = new Margin(IconMarginDisabled ? 0 : 24, 0, 4, 0);
     }
 
-    public override bool SizeToChildren(bool resizeX = true, bool resizeY = true, bool recursive = false)
+    public override bool SizeToChildren(SizeToChildrenArgs args)
     {
-        base.SizeToChildren(resizeX: resizeX, resizeY: resizeY, recursive: recursive);
-        if (resizeX)
-        {
-            var maxWidth = 0;
-            foreach (var child in Children)
-            {
-                if (child.Width > maxWidth)
-                {
-                    maxWidth = child.Width;
-                }
-            }
+        var resized = base.SizeToChildren(args);
 
-            this.SetSize(maxWidth, Height);
+        if (!args.X)
+        {
+            return resized;
         }
 
-        return true;
+        var maxWidth = 0;
+        foreach (var child in Children)
+        {
+            if (child.Width > maxWidth)
+            {
+                maxWidth = child.Width;
+            }
+        }
+
+        return this.SetSize(maxWidth, Height);
     }
 
     public override JObject? GetJson(bool isRoot = false, bool onlySerializeIfNotEmpty = false)
@@ -378,12 +395,12 @@ public partial class Menu : ScrollControl
         }
     }
 
-    public GameTexture GetTemplate()
+    public IGameTexture GetTemplate()
     {
         return mBackgroundTemplateTex;
     }
 
-    public void SetBackgroundTemplate(GameTexture texture, string fileName)
+    public void SetBackgroundTemplate(IGameTexture texture, string fileName)
     {
         if (texture == null && !string.IsNullOrWhiteSpace(fileName))
         {

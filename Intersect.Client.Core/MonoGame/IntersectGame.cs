@@ -21,8 +21,12 @@ using Intersect.Utilities;
 using MainMenu = Intersect.Client.Interface.Menu.MainMenu;
 using Intersect.Client.Interface.Shared;
 using Intersect.Client.MonoGame.NativeInterop;
+using Intersect.Client.MonoGame.NativeInterop.OpenGL;
 using Intersect.Core;
+using Intersect.Framework.Core;
+using Intersect.Framework.SystemInformation;
 using Microsoft.Extensions.Logging;
+using Exception = System.Exception;
 
 namespace Intersect.Client.MonoGame;
 
@@ -153,6 +157,8 @@ internal partial class IntersectGame : Game
     {
         base.Initialize();
 
+        PlatformStatistics.GPUStatisticsProvider = GL.CreateGPUStatisticsProvider();
+
         if (mUpdater != null)
         {
             //Set the size of the updater screen before applying graphic changes.
@@ -200,6 +206,8 @@ internal partial class IntersectGame : Game
         PostStartupAction();
     }
 
+    private TimeSpan _elapsedSincePlatformStatisticsRefresh;
+
     /// <summary>
     ///     Allows the game to run logic such as updating the world,
     ///     checking for collisions, gathering input, and playing audio.
@@ -207,6 +215,13 @@ internal partial class IntersectGame : Game
     /// <param name="gameTime">Provides a snapshot of timing values.</param>
     protected override void Update(GameTime gameTime)
     {
+        _elapsedSincePlatformStatisticsRefresh += gameTime.ElapsedGameTime;
+        if (_elapsedSincePlatformStatisticsRefresh.TotalSeconds > 1)
+        {
+            _elapsedSincePlatformStatisticsRefresh = default;
+            PlatformStatistics.Refresh();
+        }
+
         if (mUpdater != null)
         {
             if (mUpdater.CheckUpdaterContentLoaded())
@@ -379,14 +394,39 @@ internal partial class IntersectGame : Game
         {
             mUpdater?.Stop();
         }
-        catch
+        catch (Exception exception)
         {
+            ApplicationContext.Context.Value?.Logger.LogWarning(
+                exception,
+                "Exception thrown while stopping the updater on game close"
+            );
         }
 
-        //Just close if we don't need to show a combat warning
+        try
+        {
+            Interface.Interface.DestroyGwen();
+        }
+        catch (Exception exception)
+        {
+            ApplicationContext.Context.Value?.Logger.LogWarning(
+                exception,
+                "Exception thrown while destroying GWEN on game close"
+            );
+        }
+
+        try
+        {
+            Networking.Network.Close("quitting");
+        }
+        catch (Exception exception)
+        {
+            ApplicationContext.Context.Value?.Logger.LogWarning(
+                exception,
+                "Exception thrown while closing the network on game close"
+            );
+        }
+
         base.OnExiting(sender, args);
-        Networking.Network.Close("quitting");
-        Dispose();
     }
 
     private void DrawUpdater()
@@ -531,7 +571,14 @@ internal partial class IntersectGame : Game
 
     protected override void Dispose(bool disposing)
     {
-        base.Dispose(disposing);
+        try
+        {
+            base.Dispose(disposing);
+        }
+        catch (NullReferenceException)
+        {
+            throw;
+        }
 
         if (!disposing)
         {
@@ -565,7 +612,15 @@ internal partial class IntersectGame : Game
             }
 
             using var game = new IntersectGame(context, postStartupAction);
-            game.Run();
+            try
+            {
+                game.Run();
+            }
+            catch (Exception exception)
+            {
+                context.Logger.LogCritical(exception, "Game is crashing due to an exception");
+                throw;
+            }
         }
 
         private delegate void SdlInit(int flags);

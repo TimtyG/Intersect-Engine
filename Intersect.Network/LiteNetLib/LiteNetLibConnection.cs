@@ -93,7 +93,24 @@ public sealed class LiteNetLibConnection : AbstractConnection
     {
         buffer = default;
 
-        var cipherdata = reader.GetRemainingBytes();
+        reader.Get(out int cipherdataLength);
+        var cipherdata = new byte[cipherdataLength];
+        reader.GetBytes(cipherdata, cipherdataLength);
+
+#if DEBUG
+        byte[]? debugPlaindata = null;
+        int debugPlaindataLength;
+        if (Debugger.IsAttached)
+        {
+            if (!reader.EndOfData)
+            {
+                reader.Get(out debugPlaindataLength);
+                debugPlaindata = new byte[debugPlaindataLength];
+                reader.GetBytes(debugPlaindata, debugPlaindataLength);
+            }
+        }
+#endif
+
         if (cipherdata == default)
         {
             return false;
@@ -114,8 +131,17 @@ public sealed class LiteNetLibConnection : AbstractConnection
             case EncryptionResult.InvalidTag:
             case EncryptionResult.EmptyInput:
             case EncryptionResult.SizeMismatch:
+                // Symmetric Decryption Error Result
+                ApplicationContext.Context.Value?.Logger.LogWarning($"SDER: {Guid} {decryptionResult}");
+                return false;
             case EncryptionResult.Error:
-                ApplicationContext.Context.Value?.Logger.LogWarning($"RIEP: {Guid} {decryptionResult}");
+#if DEBUG
+                var cipherNonce = cipherdata[7..][..12];
+                var debugEncryptionResult = _symmetric.TryEncrypt(debugPlaindata, cipherNonce, out var debugCipherdata);
+                var expectedMessage = MessagePacker.Instance.Deserialize(debugPlaindata);
+#endif
+                // Symmetric Decryption Error Result
+                ApplicationContext.Context.Value?.Logger.LogWarning($"SDER: {Guid} {decryptionResult}");
                 return false;
             default:
                 throw new UnreachableException();
@@ -141,7 +167,8 @@ public sealed class LiteNetLibConnection : AbstractConnection
             case EncryptionResult.EmptyInput:
             case EncryptionResult.SizeMismatch:
             case EncryptionResult.Error:
-                ApplicationContext.Context.Value?.Logger.LogWarning($"RIEP: {Guid} {encryptionResult}");
+                // Symmetric Encryption Error Result
+                ApplicationContext.Context.Value?.Logger.LogWarning($"SEER: {Guid} {encryptionResult}");
                 return false;
 
             default:
@@ -151,9 +178,22 @@ public sealed class LiteNetLibConnection : AbstractConnection
 #if DIAGNOSTIC
         ApplicationContext.Context.Value?.Logger.LogDebug($"Send({transmissionMode}) cipherdata({cipherdata.Length})={Convert.ToHexString(cipherdata)}");
 #endif
-        NetDataWriter data = new(false, cipherdata.Length + sizeof(byte));
-        data.Put((byte)1);
-        data.Put(cipherdata.ToArray());
+
+        NetDataWriter data = new(true, cipherdata.Length + sizeof(byte));
+        data.Put((byte)0x20);
+        data.Put((byte)0x21);
+        data.Put((byte)0x22);
+        data.Put((byte)0x23);
+
+        data.Put(cipherdata.Length);
+        data.Put(cipherdata);
+#if DEBUG
+        if (Debugger.IsAttached)
+        {
+            data.Put(packetData.Length);
+            data.Put(packetData);
+        }
+#endif
         return Send(data, transmissionMode);
     }
 

@@ -11,6 +11,7 @@ using Intersect.Client.Interface.Game.DescriptionWindows;
 using Intersect.Client.Items;
 using Intersect.Client.Localization;
 using Intersect.Client.Spells;
+using Intersect.Framework.Core;
 using Intersect.GameObjects;
 using Intersect.Utilities;
 
@@ -203,7 +204,7 @@ public partial class HotbarItem
 
         _mouseOver = true;
         _canDrag = true;
-        if (Globals.InputManager.MouseButtonDown(MouseButton.Left))
+        if (Globals.InputManager.IsMouseButtonDown(MouseButton.Left))
         {
             _canDrag = false;
 
@@ -276,7 +277,7 @@ public partial class HotbarItem
         {
             if (binding?.Key is null or Keys.None)
             {
-                _keyLabel.IsVisible = false;
+                _keyLabel.IsVisibleInTree = false;
             }
             else
             {
@@ -299,7 +300,7 @@ public partial class HotbarItem
                 }
 
                 _keyLabel.Text = assembledKeyText;
-                _keyLabel.IsVisible = true;
+                _keyLabel.IsVisibleInTree = true;
             }
 
             _hotKey = binding == null ? null : new ControlBinding(binding);
@@ -528,7 +529,7 @@ public partial class HotbarItem
 
                 if (_mouseOver)
                 {
-                    if (!Globals.InputManager.MouseButtonDown(MouseButton.Left))
+                    if (!Globals.InputManager.IsMouseButtonDown(MouseButton.Left))
                     {
                         _canDrag = true;
                         _mouseX = -1;

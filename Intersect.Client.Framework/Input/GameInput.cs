@@ -44,13 +44,15 @@ public abstract partial class GameInput : IGameInput
 
     public abstract IControlSet ControlSet { get; set; }
 
-    public IReadOnlySet<IControlsProvider> ControlsProviders => _controlsProviders.ToImmutableHashSet();
+    public IReadOnlySet<IControlsProvider> ControlsProviders => _controlsProviders;
 
     public Control[] AllControls => ControlsProviders.SelectMany(provider => provider.Controls)
         .Distinct()
         .ToArray();
 
     public abstract bool MouseHitInterface { get; }
+
+    public abstract bool IsMouseInBounds { get; }
 
     public bool AddControlsProviders(params IControlsProvider[] controlsProviders)
     {
@@ -106,9 +108,13 @@ public abstract partial class GameInput : IGameInput
         return success;
     }
 
-    public abstract bool MouseButtonDown(MouseButton mb);
+    public abstract bool IsMouseButtonDown(MouseButton mb);
+
+    public abstract bool WasMouseButtonDown(MouseButton mb);
 
     public abstract bool IsKeyDown(Keys key);
+
+    public abstract bool WasKeyDown(Keys key);
 
     public Pointf MousePosition => GetMousePosition();
 

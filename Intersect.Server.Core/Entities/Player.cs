@@ -6,6 +6,7 @@ using System.Diagnostics.CodeAnalysis;
 using Intersect.Collections.Slotting;
 using Intersect.Core;
 using Intersect.Enums;
+using Intersect.Framework.Core;
 using Intersect.Framework.Core.GameObjects.Variables;
 using Intersect.GameObjects;
 using Intersect.GameObjects.Animations;
@@ -1497,7 +1498,7 @@ public partial class Player : Entity
 
             case Resource resource:
                 {
-                    var descriptor = resource.Base;
+                    var descriptor = resource.Descriptor;
                     if (descriptor?.Event != null)
                     {
                         EnqueueStartCommonEvent(descriptor.Event);
@@ -1579,7 +1580,7 @@ public partial class Player : Entity
             }
 
             // Check that a resource is actually required.
-            var descriptor = resource.Base;
+            var descriptor = resource.Descriptor;
 
             //Check Dynamic Requirements
             if (!Conditions.MeetsConditionLists(descriptor.HarvestingRequirements, this, null))
@@ -1726,7 +1727,7 @@ public partial class Player : Entity
             }
 
             // Check that a resource is actually required.
-            var descriptor = resource.Base;
+            var descriptor = resource.Descriptor;
 
             //Check Dynamic Requirements
             if (!Conditions.MeetsConditionLists(descriptor.HarvestingRequirements, this, null))

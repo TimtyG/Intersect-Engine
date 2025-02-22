@@ -13,7 +13,7 @@ namespace Intersect.Client.Framework.Gwen.Control.Layout;
 /// <summary>
 ///     Single table row.
 /// </summary>
-public partial class TableRow : Base, IColorableText
+public partial class TableRow : Base, IColorableText, IFitHeightToContents
 {
     private readonly List<Action> mDisposalActions = [];
     private readonly List<TableCell> _columns = [];
@@ -164,25 +164,29 @@ public partial class TableRow : Base, IColorableText
     public Color? TextColor
     {
         get => _textColor;
-        set => SetAndDoIfChanged(ref _textColor, value, () =>
+        set => SetAndDoIfChanged(ref _textColor, value, SetTextColor, this);
+    }
+
+    private static void SetTextColor(TableRow @this, Color? value)
+    {
+        foreach (var column in @this._columns)
         {
-            foreach (var column in _columns)
-            {
-                column.TextColor = _textColor;
-            }
-        });
+            column.TextColor = value;
+        }
     }
 
     public Color? TextColorOverride
     {
         get => _textColorOverride;
-        set => SetAndDoIfChanged(ref _textColorOverride, value, () =>
+        set => SetAndDoIfChanged(ref _textColorOverride, value, SetTextColorOverride, this);
+    }
+
+    private static void SetTextColorOverride(TableRow @this, Color? value)
+    {
+        foreach (var column in @this._columns)
         {
-            foreach (var column in _columns)
-            {
-                column.TextColorOverride = TextColorOverride;
-            }
-        });
+            column.TextColorOverride = value;
+        }
     }
 
     public IEnumerable<string> TextColumns
@@ -276,27 +280,55 @@ public partial class TableRow : Base, IColorableText
     /// </summary>
     public event GwenEventHandler<ItemSelectedEventArgs> Selected;
 
-    public bool SizeToChildren(bool resizeX = true, bool resizeY = true, bool recursive = false)
+    public override bool SizeToChildren(SizeToChildrenArgs args)
     {
-        var columns = _columns.ToArray();
-        foreach (var column in columns)
+        RunOnMainThread(SizeColumnsToChildren, this, args);
+        return base.SizeToChildren(args);
+    }
+
+    private void SizeColumnsToChildren(TableRow @this, SizeToChildrenArgs args)
+    {
+        var padding = Padding;
+        var paddingV = padding.Bottom + padding.Top;
+        var minimumHeight = Math.Max(0, MinimumSize.Y - paddingV);
+        foreach (var cell in this._columns)
         {
-            column.SizeToChildren(resizeX: resizeX, resizeY: resizeY, recursive: recursive);
+            var shrunkCellSize = cell.MeasureShrinkToContents();
+            minimumHeight = Math.Max(minimumHeight, shrunkCellSize.Y);
         }
 
-        return base.SizeToChildren(resizeX: resizeX, resizeY: resizeY, recursive: recursive);
+        foreach (var cell in this._columns)
+        {
+            if (cell.IsEmpty)
+            {
+                continue;
+            }
+
+            var childArgs = args with { MinimumSize = cell.MinimumSize with { Y = minimumHeight }};
+            cell.SizeToChildren(childArgs);
+        }
     }
 
     protected override void OnSizeChanged(Point oldSize, Point newSize)
     {
         base.OnSizeChanged(oldSize, newSize);
 
-        ApplicationContext.CurrentContext.Logger.LogTrace(
-            "Table row {CanonicalName} resized from {OldSize} to {NewSize}",
-            ParentQualifiedName,
-            oldSize,
-            newSize
-        );
+        if (!string.IsNullOrWhiteSpace(Name))
+        {
+            ApplicationContext.CurrentContext.Logger.LogTrace(
+                "Table row {CanonicalName} resized from {OldSize} to {NewSize}",
+                ParentQualifiedName,
+                oldSize,
+                newSize
+            );
+
+            switch (Name)
+            {
+                case "SectionGPU":
+                case "SectionUI":
+                    break;
+            }
+        }
 
         if (oldSize.X == newSize.X)
         {
@@ -335,9 +367,16 @@ public partial class TableRow : Base, IColorableText
             return;
         }
 
-        if (!IsVisible)
+        if (!IsVisibleInTree)
         {
             return;
+        }
+
+        switch (childCanonicalName)
+        {
+            case "SectionGPU.Column0":
+            case "SectionUI.Column0":
+                break;
         }
 
         ApplicationContext.CurrentContext.Logger.LogTrace(
@@ -523,16 +562,16 @@ public partial class TableRow : Base, IColorableText
         mDisposalActions.Add(() => tableCellDataProvider.DataChanged -= dataChanged);
     }
 
-    public override void Dispose()
+    protected override void Dispose(bool disposing)
     {
-        base.Dispose();
-
         while (mDisposalActions.Count > 0)
         {
             var lastIndex = mDisposalActions.Count - 1;
             mDisposalActions[lastIndex]?.Invoke();
             mDisposalActions.RemoveAt(lastIndex);
         }
+
+        base.Dispose(disposing);
     }
 
     /// <summary>
@@ -596,7 +635,7 @@ public partial class TableRow : Base, IColorableText
         var textElement = column.Children.OfType<Text>().FirstOrDefault();
         if (textElement is not null)
         {
-            textElement.IsVisible = control is null;
+            textElement.IsVisibleInTree = control is null;
         }
 
         var controlsToRemove = column.Children.Where(child => child is not ControlInternal.Text && child != control)

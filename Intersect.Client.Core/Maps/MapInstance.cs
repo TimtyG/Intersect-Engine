@@ -15,6 +15,7 @@ using Intersect.Client.Localization;
 using Intersect.Compression;
 using Intersect.Core;
 using Intersect.Enums;
+using Intersect.Framework.Core;
 using Intersect.Framework.Core.GameObjects.Animations;
 using Intersect.Framework.Core.Serialization;
 using Intersect.GameObjects;
@@ -470,7 +471,7 @@ public partial class MapInstance : MapBase, IGameObject<Guid, MapInstance>, IMap
                 continue;
             }
 
-            var tilesetTexture = (GameTexture)tile.TilesetTexture;
+            var tilesetTexture = (IGameTexture)tile.TilesetTexture;
             if (tile.X < 0 || tile.Y < 0)
             {
                 continue;
@@ -882,12 +883,12 @@ public partial class MapInstance : MapBase, IGameObject<Guid, MapInstance>, IMap
                 continue;
             }
 
-            if (layerBuffers[Globals.AnimFrame] == null)
+            if (layerBuffers[Globals.AnimationFrame] == null)
             {
                 continue;
             }
 
-            var buffersForFrame = layerBuffers[Globals.AnimFrame];
+            var buffersForFrame = layerBuffers[Globals.AnimationFrame];
             foreach (var buffer in buffersForFrame)
             {
                 Graphics.Renderer?.DrawTileBuffer(buffer);
@@ -996,7 +997,7 @@ public partial class MapInstance : MapBase, IGameObject<Guid, MapInstance>, IMap
                     if (color.Background != Color.Transparent)
                     {
                         Graphics.DrawGameTexture(
-                            Graphics.Renderer.GetWhiteTexture(), new FloatRect(0, 0, 1, 1),
+                            Graphics.Renderer.WhitePixel, new FloatRect(0, 0, 1, 1),
                             new FloatRect(destX - 4, destY, textSize.X + 8, textSize.Y), color.Background
                         );
                     }
@@ -1027,7 +1028,7 @@ public partial class MapInstance : MapBase, IGameObject<Guid, MapInstance>, IMap
         int x,
         int y,
         int forceFrame,
-        GameTexture tileset,
+        IGameTexture tileset,
         GameTileBuffer buffer,
         bool update = false,
         Tile? layerTile = default,
@@ -1130,7 +1131,7 @@ public partial class MapInstance : MapBase, IGameObject<Guid, MapInstance>, IMap
             for (var y = 0; y < _height; y++)
             {
                 var layerTile = layerTiles[x, y];
-                if (layerTile.TilesetTexture is not GameTexture tilesetTexture)
+                if (layerTile.TilesetTexture is not IGameTexture tilesetTexture)
                 {
                     continue;
                 }
@@ -1373,7 +1374,7 @@ public partial class MapInstance : MapBase, IGameObject<Guid, MapInstance>, IMap
                 var spawnTime = 25 + (int)(475 * (1f - WeatherIntensity / 100f));
                 spawnTime = (int)(spawnTime *
                                    (480000f /
-                                    (Graphics.Renderer.GetScreenWidth() * Graphics.Renderer.GetScreenHeight())));
+                                    (Graphics.Renderer.ScreenWidth * Graphics.Renderer.ScreenHeight)));
 
                 _weatherParticleSpawnTime = Timing.Global.MillisecondsUtc + spawnTime;
             }

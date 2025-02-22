@@ -36,7 +36,7 @@ public partial class ShopItem
     private int mMySlot;
 
     //Textures
-    private GameRenderTexture mSfTex;
+    private IGameRenderTexture mSfTex;
 
     //Drag/Drop References
     private ShopWindow mShopWindow;
@@ -115,7 +115,7 @@ public partial class ShopItem
             return;
         }
 
-        if (Globals.InputManager.MouseButtonDown(MouseButton.Left))
+        if (Globals.InputManager.IsMouseButtonDown(MouseButton.Left))
         {
             return;
         }

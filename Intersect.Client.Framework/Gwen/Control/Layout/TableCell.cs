@@ -6,6 +6,14 @@ public class TableCell : Label
 {
     public TableCell(TableRow row, string? name = nameof(TableCell)) : base(parent: row, name: name)
     {
+        _textElement.IsVisibleInParent = false;
+    }
+
+    protected override void OnTextChanged()
+    {
+        base.OnTextChanged();
+
+        _textElement.IsVisibleInParent = !string.IsNullOrEmpty(Text);
     }
 
     protected override void OnDockChanged(Pos oldDock, Pos newDock)
@@ -16,11 +24,6 @@ public class TableCell : Label
     protected override void Layout(Skin.Base skin)
     {
         base.Layout(skin);
-    }
-
-    public override bool SizeToChildren(bool resizeX = true, bool resizeY = true, bool recursive = false)
-    {
-        return base.SizeToChildren(resizeX, resizeY, recursive);
     }
 
     public override bool SizeToContents(out Point contentSize)

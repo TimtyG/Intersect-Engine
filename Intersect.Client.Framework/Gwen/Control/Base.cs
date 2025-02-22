@@ -1,10 +1,12 @@
 using System.Collections.Concurrent;
 using System.Diagnostics;
+using System.Text;
 using Intersect.Client.Framework.File_Management;
 using Intersect.Client.Framework.GenericClasses;
 using Intersect.Client.Framework.Graphics;
 using Intersect.Client.Framework.Gwen.Anim;
 using Intersect.Client.Framework.Gwen.Control.EventArguments;
+using Intersect.Client.Framework.Gwen.Control.Layout;
 using Intersect.Client.Framework.Gwen.ControlInternal;
 using Intersect.Client.Framework.Gwen.DragDrop;
 using Intersect.Client.Framework.Gwen.Input;
@@ -16,17 +18,26 @@ using Intersect.Client.Framework.Gwen.Renderer;
 using Intersect.Client.Framework.Input;
 using Intersect.Core;
 using Intersect.Framework;
+using Intersect.Framework.Collections;
 using Intersect.Framework.Reflection;
 using Intersect.Framework.Serialization;
+using Intersect.Framework.Threading;
 using Microsoft.Extensions.Logging;
 
 namespace Intersect.Client.Framework.Gwen.Control;
+
+public record struct NodePair(Base This, Base? Parent);
 
 /// <summary>
 ///     Base control class.
 /// </summary>
 public partial class Base : IDisposable
 {
+    public delegate void GwenEventHandler<in TArgs>(Base sender, TArgs arguments) where TArgs : EventArgs;
+
+    public delegate void GwenEventHandler<in TSender, in TArgs>(TSender sender, TArgs arguments)
+        where TSender : Base where TArgs : EventArgs;
+
     private const string PropertyNameInnerPanel = "InnerPanel";
 
     private bool _inheritParentEnablementProperties;
@@ -42,107 +53,139 @@ public partial class Base : IDisposable
         }
     }
 
-    public delegate void GwenEventHandler<in TArgs>(Base sender, TArgs arguments) where TArgs : EventArgs;
-
-    public delegate void GwenEventHandler<in TSender, in TArgs>(TSender sender, TArgs arguments)
-        where TSender : Base where TArgs : EventArgs;
-
-    /// <summary>
-    ///     Accelerator map.
-    /// </summary>
-    private readonly Dictionary<string, GwenEventHandler<EventArgs>> mAccelerators;
-
-    /// <summary>
-    ///     Real list of children.
-    /// </summary>
-    private readonly List<Base> mChildren;
+    private bool _disposed;
+    private bool _disposeCompleted;
+    private StackTrace? _disposeStack;
 
     private Canvas? _canvas;
 
-    /// <summary>
-    ///     This is the panel's actual parent - most likely the logical
-    ///     parent's InnerPanel (if it has one). You should rarely need this.
-    /// </summary>
-    private Base? mActualParent;
+    protected Modal? _modal;
+    private Base? _previousParent;
+    private Base? _parent;
+    private Base? _host { get; set; }
+    protected Base? _innerPanel;
+    private readonly List<Base> _children = [];
+
+    private bool _disabled;
+    private bool _skipRender;
+    private bool _visible;
+
+    private Package? _dragPayload;
+    private object? _userData;
+
+    private bool _drawDebugOutlines;
+
+    private readonly Dictionary<string, GwenEventHandler<EventArgs>> _accelerators = [];
+    private bool _keyboardInputEnabled;
+    private bool _mouseInputEnabled;
+    private bool _tabEnabled;
+
+    private Rectangle _bounds;
+    private Rectangle _boundsOnDisk;
+    private Rectangle _innerBounds;
+    private Rectangle _outerBounds;
+    private Rectangle _renderBounds;
+
+    private Point _maximumSize;
+    private Point _minimumSize;
+    private bool _restrictToParent;
+
+    private Margin _margin;
+    private Padding _padding;
 
     private List<Alignments> _alignments = [];
     private Padding _alignmentPadding;
     private Point _alignmentTranslation;
 
-    private Rectangle mBounds;
-    private Rectangle mBoundsOnDisk;
-
-    private bool mCacheTextureDirty;
-
-    private bool mCacheToTexture;
-
-    private Color mColor;
-
-    private Cursor mCursor;
-
-    private bool _disabled;
-
-    private bool mDisposed;
-
     private Pos _dock;
     private Padding _dockChildSpacing;
 
-    private Package mDragAndDrop_package;
-
-    private bool mDrawBackground = true;
-
-    private bool mDrawDebugOutlines;
-
-    private bool mHidden;
-    private bool _skipRender;
-
-    private bool mHideToolTip;
-
-    private Rectangle _outerBounds;
-    private Rectangle mInnerBounds;
-
-    /// <summary>
-    ///     If the innerpanel exists our children will automatically become children of that
-    ///     instead of us - allowing us to move them all around by moving that panel (useful for scrolling etc).
-    /// </summary>
-    protected Base? _innerPanel;
-
-    private bool mKeyboardInputEnabled;
-
-    private Margin mMargin;
-
-    private Point _maximumSize = default;
-
-    private Point _minimumSize = default;
-
-    private bool mMouseInputEnabled;
-
     private string? _name;
+    private string? _cachedToString;
+
+    private bool _cacheTextureDirty;
+    private bool _cacheToTexture;
 
     private bool _needsAlignment;
-    private bool _needsLayout;
+    private bool _layoutDirty;
+    private bool _dockDirty;
 
-    private Padding mPadding;
-
-    protected Modal? mModal;
-    private Base? mOldParent;
-    private Base? mParent { get; set; }
-
-    private Rectangle mRenderBounds;
-
-    private bool mRestrictToParent;
-
-    private Skin.Base mSkin;
-
-    private bool mTabable;
+    private bool _drawBackground;
+    private Color _color;
+    private Cursor _cursor;
+    private Skin.Base? _skin;
 
     private Base? _tooltip;
-
+    private bool _tooltipEnabled;
+    private IGameTexture? _tooltipBackground { get; set; }
     private string? _tooltipBackgroundName;
-
-    private GameTexture? _tooltipBackground { get; set; }
-
+    private GameFont? _tooltipFont;
+    private string? _tooltipFontInfo;
     private Color? _tooltipTextColor;
+
+    protected virtual string InternalToString()
+    {
+        StringBuilder builder = new();
+
+        builder.Append(GetType().GetName(qualified: false));
+
+        var name = _name?.Trim();
+        if (!string.IsNullOrWhiteSpace(name))
+        {
+            builder.Append($"({name})");
+        }
+
+        return builder.ToString();
+    }
+
+    /// <summary>
+    ///     Initializes a new instance of the <see cref="Base" /> class.
+    /// </summary>
+    /// <param name="parent">parent control</param>
+    /// <param name="name">name of this control</param>
+    public Base(Base? parent = default, string? name = default)
+    {
+        _threadQueue = new ThreadQueue();
+        _threadQueue.QueueNotEmpty += () => UpdatePendingThreadQueues(1);
+        _name = name ?? string.Empty;
+        _visible = true;
+        _dockDirty = true;
+        _layoutDirty = true;
+        _disabled = false;
+        _tooltip = null;
+        _tooltipEnabled = true;
+        _cacheTextureDirty = true;
+        _cacheToTexture = false;
+        _drawBackground = true;
+
+        _keyboardInputEnabled = false;
+        _mouseInputEnabled = true;
+        _tabEnabled = false;
+
+        PreLayout = new ManualActionQueue(_preLayoutActionsParent);
+        PostLayout = new ManualActionQueue(_postLayoutActionsParent);
+
+        if (this is Canvas canvas)
+        {
+            _canvas = canvas;
+        }
+
+        Parent = parent;
+
+        _bounds = new Rectangle(0, 0, 10, 10);
+        _padding = Padding.Zero;
+        _margin = Margin.Zero;
+        _color = Color.White;
+        _alignmentPadding = Padding.Zero;
+
+        RestrictToParent = false;
+
+        _cursor = Cursors.Default;
+
+        BoundsOutlineColor = Color.Red;
+        MarginOutlineColor = Color.Green;
+        PaddingOutlineColor = Color.Blue;
+    }
 
     public virtual string? TooltipFontName
     {
@@ -172,6 +215,32 @@ public partial class Base : IDisposable
         }
     }
 
+    public virtual IGameTexture? TooltipBackground
+    {
+        get => _tooltipBackground;
+        set
+        {
+            if (value != _tooltipBackground)
+            {
+                return;
+            }
+
+            if (value?.Name == _tooltipBackgroundName)
+            {
+                _tooltipBackground = value;
+                return;
+            }
+
+            _tooltipBackground = value;
+            _tooltipBackgroundName = value?.Name;
+
+            if (Tooltip is Label label)
+            {
+                label.ToolTipBackground = _tooltipBackground;
+            }
+        }
+    }
+
     public virtual string? TooltipBackgroundName
     {
         get => _tooltipBackgroundName;
@@ -183,7 +252,7 @@ public partial class Base : IDisposable
             }
 
             _tooltipBackgroundName = value;
-            GameTexture? texture = null;
+            IGameTexture? texture = null;
             if (!string.IsNullOrWhiteSpace(_tooltipBackgroundName))
             {
                 texture = GameContentManager.Current.GetTexture(
@@ -219,57 +288,6 @@ public partial class Base : IDisposable
         }
     }
 
-    private GameFont? _tooltipFont;
-
-    private string? _tooltipFontInfo;
-
-    private object mUserData;
-
-    /// <summary>
-    ///     Initializes a new instance of the <see cref="Base" /> class.
-    /// </summary>
-    /// <param name="parent">parent control</param>
-    /// <param name="name">name of this control</param>
-    public Base(Base? parent = default, string? name = default)
-    {
-        if (this is Canvas canvas)
-        {
-            _canvas = canvas;
-        }
-
-        _name = name ?? string.Empty;
-        mChildren = [];
-        mAccelerators = [];
-
-        Parent = parent;
-
-        mHidden = false;
-        mBounds = new Rectangle(0, 0, 10, 10);
-        mPadding = Padding.Zero;
-        mMargin = Margin.Zero;
-        mColor = Color.White;
-        _alignmentPadding = Padding.Zero;
-
-        RestrictToParent = false;
-
-        MouseInputEnabled = true;
-        KeyboardInputEnabled = false;
-
-        Invalidate();
-        Cursor = Cursors.Default;
-
-        //ToolTip = null;
-        IsTabable = false;
-        ShouldDrawBackground = true;
-        _disabled = false;
-        mCacheTextureDirty = true;
-        mCacheToTexture = false;
-
-        BoundsOutlineColor = Color.Red;
-        MarginOutlineColor = Color.Green;
-        PaddingOutlineColor = Color.Blue;
-    }
-
     /// <summary>
     ///     Font.
     /// </summary>
@@ -293,43 +311,70 @@ public partial class Base : IDisposable
     /// <summary>
     ///     Logical list of children. If InnerPanel is not null, returns InnerPanel's children.
     /// </summary>
-    public List<Base> Children => _innerPanel?.Children ?? mChildren;
+    public IReadOnlyList<Base> Children => _innerPanel?.Children ?? _children;
 
     /// <summary>
     ///     The logical parent. It's usually what you expect, the control you've parented it to.
     /// </summary>
     public Base? Parent
     {
-        get => mParent;
+        get => _host;
         set
         {
-            if (mParent == value)
+            if (ReferenceEquals(_host, value))
             {
                 return;
             }
 
-            if (mParent is { } oldParent)
+            if (_host is { } oldParent)
             {
-                NotifyDetachingFromRoot(oldParent.Root);
-                NotifyDetaching(oldParent);
-                oldParent.RemoveChild(this, false);
+                // Detach from the previous parent on their thread
+                oldParent.RunOnMainThread(ProcessDetachingFromParent, new NodePair(this, oldParent));
             }
 
-            PropagateCanvas(value?._canvas);
-
-            mParent = value;
-            mActualParent = default;
-
-            if (mParent is not { } newParent)
+            if (value is null)
             {
-                return;
+                // If we aren't being attached to a new parent, run this immediately
+                ProcessAttachingToParent(this, null);
             }
-
-            newParent.AddChild(this);
-
-            NotifyAttachingToRoot(newParent.Root);
-            NotifyAttaching(newParent);
+            else
+            {
+                // Otherwise, we should wait until it's run on the new parent's thread
+                value.RunOnMainThread(ProcessAttachingToParent, new NodePair(this, value));
+            }
         }
+    }
+
+    private static void ProcessDetachingFromParent(NodePair pair)
+    {
+        pair.This.NotifyDetachingFromRoot(pair.Parent!.Root);
+        pair.This.NotifyDetaching(pair.Parent);
+        pair.Parent.RemoveChild(pair.This, false);
+    }
+
+    private static void ProcessAttachingToParent(NodePair pair) => ProcessAttachingToParent(pair.This, pair.Parent);
+
+    private static void ProcessAttachingToParent(Base @this, Base? parent)
+    {
+        if (parent?._threadQueue is { } parentThreadQueue)
+        {
+            @this._threadQueue.SetMainThreadId(parentThreadQueue);
+        }
+
+        @this.PropagateCanvas(parent?._canvas);
+
+        @this._host = parent;
+        @this._parent = default;
+
+        if (parent is not { } newParent)
+        {
+            return;
+        }
+
+        parent.AddChild(@this);
+
+        @this.NotifyAttachingToRoot(parent.Root);
+        @this.NotifyAttaching(parent);
     }
 
     protected virtual void OnAttached(Base parent)
@@ -344,6 +389,7 @@ public partial class Base : IDisposable
     {
         try
         {
+            parent.UpdatePendingThreadQueues(_pendingThreadQueues);
             OnAttaching(parent);
         }
         catch (Exception exception)
@@ -368,6 +414,7 @@ public partial class Base : IDisposable
     {
         try
         {
+            parent.UpdatePendingThreadQueues(-_pendingThreadQueues);
             OnDetaching(parent);
         }
         catch (Exception exception)
@@ -386,7 +433,11 @@ public partial class Base : IDisposable
     {
         try
         {
-            Root.RemoveUpdatableDataProviders(_updatableDataProviders.Keys);
+            var visibleProviders = _updatableDataProviderRefCounts.Where(e => e.Value.Visible > 0)
+                .Select(e => e.Key)
+                .ToArray();
+            root.VisibleUpdatableDataProviders(visibleProviders, false);
+            root.ListenUpdatableDataProviders(_updatableDataProviderRefCounts.Keys, false);
 
             try
             {
@@ -401,7 +452,7 @@ public partial class Base : IDisposable
                 );
             }
 
-            foreach (var child in mChildren)
+            foreach (var child in _children)
             {
                 child.NotifyDetachingFromRoot(root);
             }
@@ -423,7 +474,11 @@ public partial class Base : IDisposable
     {
         try
         {
-            Root.AddUpdatableDataProviders(_updatableDataProviders.Keys);
+            var visibleProviders = _updatableDataProviderRefCounts.Where(e => e.Value.Visible > 0)
+                .Select(e => e.Key)
+                .ToArray();
+            Root.ListenUpdatableDataProviders(_updatableDataProviderRefCounts.Keys, true);
+            Root.VisibleUpdatableDataProviders(visibleProviders, true);
 
             try
             {
@@ -438,7 +493,7 @@ public partial class Base : IDisposable
                 );
             }
 
-            foreach (var child in mChildren)
+            foreach (var child in _children)
             {
                 child.NotifyAttachingToRoot(root);
             }
@@ -460,8 +515,7 @@ public partial class Base : IDisposable
         {
             _canvas = canvas;
 
-            var children = mChildren.ToArray();
-            foreach (var child in children)
+            foreach (var child in _children)
             {
                 child.PropagateCanvas(canvas);
             }
@@ -518,6 +572,8 @@ public partial class Base : IDisposable
         Invalidate();
     }
 
+    protected static void InvalidateAlignment(Base @this) => @this.InvalidateAlignment();
+
     public virtual bool IsBlockingInput => true;
 
     /// <summary>
@@ -537,8 +593,8 @@ public partial class Base : IDisposable
             _dock = value;
             OnDockChanged(oldDock, value);
 
-            Invalidate();
-            InvalidateParent();
+            InvalidateDock();
+            InvalidateParentDock();
         }
     }
 
@@ -559,7 +615,9 @@ public partial class Base : IDisposable
         }
     }
 
-    protected bool HasSkin => mSkin != null || (mParent?.HasSkin ?? false);
+    protected bool HasSkin => _skin != null || (_host?.HasSkin ?? false);
+
+    protected Skin.Base? SafeSkin => _skin ?? _parent?.SafeSkin;
 
     /// <summary>
     ///     Current skin.
@@ -568,19 +626,16 @@ public partial class Base : IDisposable
     {
         get
         {
-            if (mSkin != null)
+            if (SafeSkin is { } skin)
             {
-                return mSkin;
-            }
-
-            if (mParent != null)
-            {
-                return mParent.Skin;
+                return skin;
             }
 
             throw new InvalidOperationException("GetSkin: null");
         }
     }
+
+    private Skin.Base? DisposeSkin => _skin ?? _host?.DisposeSkin;
 
     /// <summary>
     ///     Current tooltip.
@@ -646,12 +701,12 @@ public partial class Base : IDisposable
     {
         get
         {
-            if (mParent == null)
+            if (_host == null)
             {
                 return false;
             }
 
-            return mParent.IsMenuComponent;
+            return _host.IsMenuComponent;
         }
     }
 
@@ -665,15 +720,15 @@ public partial class Base : IDisposable
     /// </summary>
     public Padding Padding
     {
-        get => mPadding;
+        get => _padding;
         set
         {
-            if (mPadding == value)
+            if (_padding == value)
             {
                 return;
             }
 
-            mPadding = value;
+            _padding = value;
             Invalidate();
             InvalidateParent();
         }
@@ -693,15 +748,15 @@ public partial class Base : IDisposable
     /// </summary>
     public Color RenderColor
     {
-        get => mColor;
+        get => _color;
         set
         {
-            if (mColor == value)
+            if (_color == value)
             {
                 return;
             }
 
-            mColor = value;
+            _color = value;
             Invalidate();
             InvalidateParent();
         }
@@ -712,15 +767,15 @@ public partial class Base : IDisposable
     /// </summary>
     public Margin Margin
     {
-        get => mMargin;
+        get => _margin;
         set
         {
-            if (mMargin == value)
+            if (_margin == value)
             {
                 return;
             }
 
-            mMargin = value;
+            _margin = value;
             Invalidate();
             InvalidateParent();
         }
@@ -729,18 +784,15 @@ public partial class Base : IDisposable
     /// <summary>
     ///     Indicates whether the control is on top of its parent's children.
     /// </summary>
-    public virtual bool IsOnTop
-
-        // todo: validate
-        => this == Parent.mChildren.First();
+    public bool IsOnTop => Parent?.IndexOf(this) == (Parent?.Children.Count ?? -1);
 
     /// <summary>
     ///     User data associated with the control.
     /// </summary>
     public object? UserData
     {
-        get => mUserData;
-        set => mUserData = value;
+        get => _userData;
+        set => _userData = value;
     }
 
     /// <summary>
@@ -770,35 +822,86 @@ public partial class Base : IDisposable
     /// <summary>
     ///     Indicates whether the control is hidden.
     /// </summary>
-    public virtual bool IsHidden
+    public bool IsHidden
     {
-        get => ((_inheritParentEnablementProperties && Parent is {} parent) ? parent.IsHidden : mHidden);
-        set
+        get => ((_inheritParentEnablementProperties && Parent is {} parent) ? parent.IsHidden : !_visible);
+        set => RunOnMainThread(SetVisible, !value);
+    }
+
+    private static void SetVisible(Base @this, bool value)
+    {
+        var wasVisibleInParent = @this._visible;
+
+        if (@this is { _inheritParentEnablementProperties: true, Parent: { } parent })
         {
-            if (value == mHidden)
+            if (value != parent._visible)
             {
-                // ApplicationContext.CurrentContext.Logger.LogTrace(
-                //     "{ComponentTypeName} (\"{ComponentName}\") set to same visibility ({Visibility})",
-                //     GetType().GetName(qualified: true),
-                //     CanonicalName,
-                //     !value
-                // );
-                return;
+                ApplicationContext.CurrentContext.Logger.LogTrace(
+                    "Tried to change visibility of restricted node '{NodeName}' to {Visible} when the parent ({ParentNodeName}) is set to {ParentVisible}",
+                    @this.CanonicalName,
+                    value,
+                    parent.CanonicalName,
+                    !value
+                );
             }
 
-            var hidden = _inheritParentEnablementProperties ? (Parent?.IsHidden ?? value) : value;
-            mHidden = hidden;
+            value = parent._visible;
+        }
 
-            VisibilityChangedEventArgs eventArgs = new()
+        if (value == wasVisibleInParent)
+        {
+            // ApplicationContext.CurrentContext.Logger.LogTrace(
+            //     "{ComponentTypeName} (\"{ComponentName}\") set to same visibility ({Visibility})",
+            //     GetType().GetName(qualified: true),
+            //     CanonicalName,
+            //     !value
+            // );
+
+            // Skip the rest of this method since nothing actually changed for this node
+            return;
+        }
+
+        var visibilityInTreeChanging = value != @this.IsVisibleInTree;
+
+        @this._visible = value;
+
+        if (visibilityInTreeChanging)
+        {
+            @this.NotifyVisibilityInTreeChanged(value);
+        }
+
+        if (@this._dock != default)
+        {
+            @this.InvalidateParentDock();
+        }
+
+        VisibilityChangedEventArgs eventArgs = new(value, visibilityInTreeChanging ? value : !value);
+        @this.OnVisibilityChanged(@this, eventArgs);
+        @this.VisibilityChanged?.Invoke(@this, eventArgs);
+
+        @this.Invalidate();
+        @this.InvalidateParent();
+    }
+
+    private void NotifyVisibilityInTreeChanged(bool visible)
+    {
+        VisibleUpdatableDataProviders(_updatableDataProviderRefCounts.Keys, visible);
+
+        foreach (var child in _children)
+        {
+            if (child._inheritParentEnablementProperties)
             {
-                IsVisible = !hidden,
-            };
+                SetVisible(child, _visible);
+                continue;
+            }
 
-            OnVisibilityChanged(this, eventArgs);
-            VisibilityChanged?.Invoke(this, eventArgs);
+            if (!child._visible)
+            {
+                continue;
+            }
 
-            Invalidate();
-            InvalidateParent();
+            child.NotifyVisibilityInTreeChanged(visible);
+            child.VisibilityChanged?.Invoke(this, new VisibilityChangedEventArgs(child._visible, visible));
         }
     }
 
@@ -809,7 +912,7 @@ public partial class Base : IDisposable
 
     protected virtual Point InnerPanelSizeFrom(Point size) => size;
 
-    public virtual bool IsHiddenByTree => mHidden || (Parent?.IsHiddenByTree ?? false);
+    public virtual bool IsHiddenByTree => !_visible || (Parent?.IsHiddenByTree ?? false);
 
     public virtual bool IsDisabledByTree => _disabled || (Parent?.IsDisabledByTree ?? false);
 
@@ -818,8 +921,8 @@ public partial class Base : IDisposable
     /// </summary>
     public bool RestrictToParent
     {
-        get => mRestrictToParent;
-        set => mRestrictToParent = value;
+        get => _restrictToParent;
+        set => _restrictToParent = value;
     }
 
     /// <summary>
@@ -827,15 +930,15 @@ public partial class Base : IDisposable
     /// </summary>
     public bool MouseInputEnabled
     {
-        get => mMouseInputEnabled;
+        get => _mouseInputEnabled;
         set
         {
-            if (value == mMouseInputEnabled)
+            if (value == _mouseInputEnabled)
             {
                 return;
             }
 
-            mMouseInputEnabled = value;
+            _mouseInputEnabled = value;
         }
     }
 
@@ -844,8 +947,8 @@ public partial class Base : IDisposable
     /// </summary>
     public bool KeyboardInputEnabled
     {
-        get => mKeyboardInputEnabled;
-        set => mKeyboardInputEnabled = value;
+        get => _keyboardInputEnabled;
+        set => _keyboardInputEnabled = value;
     }
 
     /// <summary>
@@ -853,15 +956,15 @@ public partial class Base : IDisposable
     /// </summary>
     public Cursor Cursor
     {
-        get => mCursor;
-        set => mCursor = value;
+        get => _cursor;
+        set => _cursor = value;
     }
 
     public int GlobalX => X + (Parent?.GlobalX ?? 0);
 
     public int GlobalY => Y + (Parent?.GlobalY ?? 0);
 
-    public Point PositionGlobal => new Point(X, Y) + (mActualParent?.PositionGlobal ?? Point.Empty);
+    public Point PositionGlobal => new Point(X, Y) + (_parent?.PositionGlobal ?? Point.Empty);
 
     public Rectangle GlobalBounds => new(PositionGlobal, Size);
 
@@ -870,8 +973,8 @@ public partial class Base : IDisposable
     /// </summary>
     public bool IsTabable
     {
-        get => mTabable;
-        set => mTabable = value;
+        get => _tabEnabled;
+        set => _tabEnabled = value;
     }
 
     /// <summary>
@@ -879,8 +982,8 @@ public partial class Base : IDisposable
     /// </summary>
     public bool ShouldDrawBackground
     {
-        get => mDrawBackground;
-        set => mDrawBackground = value;
+        get => _drawBackground;
+        set => _drawBackground = value;
     }
 
     /// <summary>
@@ -888,18 +991,18 @@ public partial class Base : IDisposable
     /// </summary>
     public bool ShouldCacheToTexture
     {
-        get => mCacheToTexture;
-        set => mCacheToTexture = value;
+        get => _cacheToTexture;
+        set => SetAndDoIfChanged(ref _cacheToTexture, value, Invalidate);
     }
 
     /// <summary>
     ///     Gets the control's internal canonical name.
     /// </summary>
     public string ParentQualifiedName =>
-        mParent is { } parent ? $"{parent.Name}.{Name}" : Name;
+        _host is { } parent ? $"{parent.Name}.{Name}" : Name;
 
     public string CanonicalName =>
-        (mActualParent ?? mParent) is { } parent
+        (_parent ?? _host) is { } parent
             ? $"{parent.CanonicalName}.{Name}"
             : _name ?? $"(unnamed {GetType().GetName(qualified: true)})";
 
@@ -911,13 +1014,22 @@ public partial class Base : IDisposable
     public string Name
     {
         get => _name ?? $"(unnamed {GetType().Name})";
-        set => _name = value;
+        set
+        {
+            if (_name == value)
+            {
+                return;
+            }
+
+            _name = value;
+            _cachedToString = null;
+        }
     }
 
     /// <summary>
     ///     Control's size and position relative to the parent.
     /// </summary>
-    public Rectangle Bounds => mBounds;
+    public Rectangle Bounds => _bounds;
 
     public Rectangle OuterBounds => _outerBounds;
 
@@ -926,12 +1038,12 @@ public partial class Base : IDisposable
     /// <summary>
     ///     Bounds for the renderer.
     /// </summary>
-    public Rectangle RenderBounds => mRenderBounds;
+    public Rectangle RenderBounds => _renderBounds;
 
     /// <summary>
     ///     Bounds adjusted by padding.
     /// </summary>
-    public Rectangle InnerBounds => mInnerBounds;
+    public Rectangle InnerBounds => _innerBounds;
 
     /// <summary>
     ///     Size restriction.
@@ -941,11 +1053,19 @@ public partial class Base : IDisposable
         get => _minimumSize;
         set
         {
+            var oldValue = _minimumSize;
+            if (oldValue == value)
+            {
+                return;
+            }
+
             _minimumSize = value;
             if (_innerPanel != null)
             {
                 _innerPanel.MinimumSize = InnerPanelSizeFrom(value);
             }
+            OnMinimumSizeChanged(oldValue, value);
+            Invalidate(alsoInvalidateParent: true);
         }
     }
 
@@ -957,11 +1077,19 @@ public partial class Base : IDisposable
         get => _maximumSize;
         set
         {
+            var oldValue = _maximumSize;
+            if (oldValue == value)
+            {
+                return;
+            }
+
             _maximumSize = value;
             if (_innerPanel != null)
             {
                 _innerPanel.MaximumSize = InnerPanelSizeFrom(value);
             }
+            OnMaximumSizeChanged(oldValue, value);
+            Invalidate(alsoInvalidateParent: true);
         }
     }
 
@@ -977,24 +1105,24 @@ public partial class Base : IDisposable
     /// <summary>
     ///     Indicates whether the control and its parents are visible.
     /// </summary>
-    public bool IsVisible
+    public bool IsVisibleInTree
     {
         get
         {
-            if (IsHidden)
+            if (!_visible)
             {
                 return false;
             }
 
-            return Parent is not { } parent || parent.IsVisible || ToolTip.IsActiveTooltip(parent);
+            return Parent is not { } parent || parent.IsVisibleInTree || ToolTip.IsActiveTooltip(parent);
         }
-        set => IsHidden = !value;
+        set => RunOnMainThread(SetVisible, value);
     }
 
     public bool IsVisibleInParent
     {
         get => !IsHidden || Parent is not { } parent || ToolTip.IsActiveTooltip(parent);
-        set => IsHidden = false;
+        set => RunOnMainThread(SetVisible, value);
     }
 
     /// <summary>
@@ -1002,7 +1130,7 @@ public partial class Base : IDisposable
     /// </summary>
     public int X
     {
-        get => mBounds.X;
+        get => _bounds.X;
         set => SetPosition(value, Y);
     }
 
@@ -1011,7 +1139,7 @@ public partial class Base : IDisposable
     /// </summary>
     public int Y
     {
-        get => mBounds.Y;
+        get => _bounds.Y;
         set => SetPosition(X, value);
     }
 
@@ -1019,13 +1147,13 @@ public partial class Base : IDisposable
 
     public int Width
     {
-        get => mBounds.Width;
+        get => _bounds.Width;
         set => SetSize(value, Height);
     }
 
     public int Height
     {
-        get => mBounds.Height;
+        get => _bounds.Height;
         set => SetSize(Width, value);
     }
 
@@ -1035,21 +1163,21 @@ public partial class Base : IDisposable
 
     public Point Size
     {
-        get => mBounds.Size;
+        get => _bounds.Size;
         set => SetSize(value.X, value.Y);
     }
 
-    public int InnerWidth => mBounds.Width - (mPadding.Left + mPadding.Right);
+    public int InnerWidth => _bounds.Width - (_padding.Left + _padding.Right);
 
-    public int MaximumInnerWidth => _maximumSize.X - (mPadding.Left + mPadding.Right);
+    public int MaximumInnerWidth => _maximumSize.X - (_padding.Left + _padding.Right);
 
-    public int InnerHeight => mBounds.Height - (mPadding.Top + mPadding.Bottom);
+    public int InnerHeight => _bounds.Height - (_padding.Top + _padding.Bottom);
 
-    public int MaximumInnerHeight => _maximumSize.Y - (mPadding.Top + mPadding.Bottom);
+    public int MaximumInnerHeight => _maximumSize.Y - (_padding.Top + _padding.Bottom);
 
-    public int Bottom => mBounds.Bottom + mMargin.Bottom;
+    public int Bottom => _bounds.Bottom + _margin.Bottom;
 
-    public int Right => mBounds.Right + mMargin.Right;
+    public int Right => _bounds.Right + _margin.Right;
 
     /// <summary>
     ///     Determines whether margin, padding and bounds outlines for the control will be drawn. Applied recursively to all
@@ -1057,18 +1185,24 @@ public partial class Base : IDisposable
     /// </summary>
     public bool DrawDebugOutlines
     {
-        get => mDrawDebugOutlines;
+        get => _drawDebugOutlines;
         set
         {
-            mDrawDebugOutlines = value;
+            _drawDebugOutlines = value;
             if (_innerPanel is { } innerPanel)
             {
                 innerPanel.DrawDebugOutlines = value;
             }
-            foreach (var child in mChildren)
-            {
-                child.DrawDebugOutlines = value;
-            }
+
+            RunOnMainThread(PropagateDrawDebugOutlinesToChildren, this, value);
+        }
+    }
+
+    private static void PropagateDrawDebugOutlinesToChildren(Base @this, bool drawDebugOutlines)
+    {
+        foreach (var child in @this._children)
+        {
+            child.DrawDebugOutlines = drawDebugOutlines;
         }
     }
 
@@ -1089,20 +1223,29 @@ public partial class Base : IDisposable
     /// <summary>
     ///     Performs application-defined tasks associated with freeing, releasing, or resetting unmanaged resources.
     /// </summary>
-    public virtual void Dispose()
+    public void Dispose()
     {
-        ////debug.print("Control.Base: Disposing {0} {1:X}", this, GetHashCode());
-        if (mDisposed)
+        try
         {
-            return;
+            ObjectDisposedException.ThrowIf(_disposed, this);
+        }
+        catch
+        {
+            throw;
         }
 
-        ICacheToTexture cache = default;
+        _disposeStack = new StackTrace(fNeedFileInfo: true);
+
+        _disposed = true;
+
+        Dispose(disposing: true);
+
+        ICacheToTexture? cache = default;
 
 #pragma warning disable CA1031 // Do not catch general exception types
         try
         {
-            cache = Skin.Renderer.Ctt;
+            cache = DisposeSkin?.Renderer.Ctt;
         }
         catch
         {
@@ -1134,20 +1277,53 @@ public partial class Base : IDisposable
         ToolTip.ControlDeleted(this);
         Animation.Cancel(this);
 
-        // [Fix]: "InvalidOperationException: Collection was modified (during iteration); enumeration operation may not execute".
-        // (Creates an array copy of the children to avoid modifying the collection during iteration).
-        var children = mChildren.ToArray();
-        foreach (var child in children)
+        DisposeChildrenOf(this);
+
+        GC.SuppressFinalize(this);
+
+        _disposeCompleted = true;
+    }
+
+    protected virtual void Dispose(bool disposing)
+    {
+    }
+
+    private void DisposeChildrenOf(Base target)
+    {
+        if (_host is not { _disposeCompleted: false } parent)
         {
-            child.Dispose();
+            DisposeChildren(target);
+        }
+        else
+        {
+            parent.DisposeChildrenOf(target);
+        }
+    }
+
+    private static void DisposeChildren(Base @this)
+    {
+        var children = @this._children.ToArray();
+        try
+        {
+            foreach (var child in @this._children)
+            {
+                child.Dispose();
+            }
+        }
+        catch
+        {
+            throw;
         }
 
-        mChildren?.Clear();
-
-        _innerPanel?.Dispose();
-
-        mDisposed = true;
-        GC.SuppressFinalize(this);
+        if (@this is Modal)
+        {
+            ApplicationContext.CurrentContext.Logger.LogTrace(
+                "Clearing {ChildCount} children of Modal {Name}",
+                @this._children.Count,
+                @this.CanonicalName
+            );
+        }
+        @this._children.Clear();
     }
 
     /// <summary>
@@ -1184,30 +1360,48 @@ public partial class Base : IDisposable
         return JsonConvert.SerializeObject(GetJson(isRoot), Formatting.Indented);
     }
 
+    private static void AddChildrenToJson(Base @this, JObject json)
+    {
+        // ReSharper disable once ForeachCanBePartlyConvertedToQueryUsingAnotherGetEnumerator
+        foreach (var node in @this._children)
+        {
+            if (node == @this._innerPanel)
+            {
+                continue;
+            }
+
+            if (node == @this.Tooltip)
+            {
+                continue;
+            }
+
+            if (node._name is not { } name || string.IsNullOrWhiteSpace(name))
+            {
+                continue;
+            }
+
+            if (json.ContainsKey(name))
+            {
+                ApplicationContext.CurrentContext.Logger.LogWarning(
+                    "Unable to add '{ChildName}' to the JSON of {ParentName} because a sibling shares the same name",
+                    name,
+                    @this.CanonicalName
+                );
+                continue;
+            }
+
+            var nodeJson = node.GetJson();
+            json.Add(node.Name, nodeJson);
+        }
+    }
+
     public virtual JObject? GetJson(bool isRoot = false, bool onlySerializeIfNotEmpty = false)
     {
-        JObject children = new();
+        JObject json = new();
 
-        // ReSharper disable once ForeachCanBePartlyConvertedToQueryUsingAnotherGetEnumerator
-        foreach (var component in mChildren)
-        {
-            if (component == _innerPanel)
-            {
-                continue;
-            }
+        RunOnMainThread(AddChildrenToJson, this, json);
 
-            if (component == Tooltip)
-            {
-                continue;
-            }
-
-            if (!string.IsNullOrEmpty(component.Name) && children[component.Name] == null)
-            {
-                children.Add(component.Name, component.GetJson());
-            }
-        }
-
-        if (onlySerializeIfNotEmpty && !children.HasValues)
+        if (onlySerializeIfNotEmpty && !json.HasValues)
         {
             return null;
         }
@@ -1215,26 +1409,26 @@ public partial class Base : IDisposable
         isRoot |= Parent == default;
 
         var boundsToWrite = isRoot
-            ? new Rectangle(mBoundsOnDisk.X, mBoundsOnDisk.Y, mBounds.Width, mBounds.Height)
-            : mBounds;
+            ? new Rectangle(_boundsOnDisk.X, _boundsOnDisk.Y, _bounds.Width, _bounds.Height)
+            : _bounds;
 
         var serializedProperties = new JObject(
             new JProperty(nameof(Bounds), Rectangle.ToString(boundsToWrite)),
             new JProperty(nameof(Dock), Dock.ToString()),
-            new JProperty(nameof(Padding), Padding.ToString(mPadding)),
+            new JProperty(nameof(Padding), Padding.ToString(_padding)),
             new JProperty("AlignmentEdgeDistances", Padding.ToString(_alignmentPadding)),
             new JProperty("AlignmentTransform", _alignmentTranslation.ToString()),
-            new JProperty(nameof(Margin), mMargin.ToString()),
-            new JProperty(nameof(RenderColor), Color.ToString(mColor)),
+            new JProperty(nameof(Margin), _margin.ToString()),
+            new JProperty(nameof(RenderColor), Color.ToString(_color)),
             new JProperty(nameof(Alignments), string.Join(",", _alignments.ToArray())),
-            new JProperty("DrawBackground", mDrawBackground),
+            new JProperty("DrawBackground", _drawBackground),
             new JProperty(nameof(MinimumSize), _minimumSize.ToString()),
             new JProperty(nameof(MaximumSize), _maximumSize.ToString()),
             new JProperty("Disabled", _disabled),
-            new JProperty("Hidden", mHidden),
-            new JProperty(nameof(RestrictToParent), mRestrictToParent),
-            new JProperty(nameof(MouseInputEnabled), mMouseInputEnabled),
-            new JProperty("HideToolTip", mHideToolTip),
+            new JProperty("Hidden", !_visible),
+            new JProperty(nameof(RestrictToParent), _restrictToParent),
+            new JProperty(nameof(MouseInputEnabled), _mouseInputEnabled),
+            new JProperty("HideToolTip", !_tooltipEnabled),
             new JProperty("ToolTipBackground", _tooltipBackgroundName),
             new JProperty("ToolTipFont", _tooltipFontInfo),
             new JProperty(
@@ -1251,9 +1445,9 @@ public partial class Base : IDisposable
             }
         }
 
-        if (children.HasValues)
+        if (json.HasValues)
         {
-            serializedProperties.Add(nameof(Children), children);
+            serializedProperties.Add(nameof(Children), json);
         }
 
         return FixJson(serializedProperties);
@@ -1383,15 +1577,15 @@ public partial class Base : IDisposable
 
         if (obj[nameof(Bounds)] != null)
         {
-            mBoundsOnDisk = Rectangle.FromString((string)obj[nameof(Bounds)]);
+            _boundsOnDisk = Rectangle.FromString((string)obj[nameof(Bounds)]);
             isRoot = isRoot || Parent == default;
             if (isRoot)
             {
-                SetSize(mBoundsOnDisk.Width, mBoundsOnDisk.Height);
+                SetSize(_boundsOnDisk.Width, _boundsOnDisk.Height);
             }
             else
             {
-                SetBounds(ValidateJsonBounds(mBoundsOnDisk));
+                SetBounds(ValidateJsonBounds(_boundsOnDisk));
             }
         }
 
@@ -1462,21 +1656,14 @@ public partial class Base : IDisposable
 
         if (obj["HideToolTip"] != null && (bool) obj["HideToolTip"])
         {
-            mHideToolTip = true;
+            _tooltipEnabled = false;
             SetToolTipText(null);
         }
 
-        if (obj["ToolTipBackground"] is JValue { Type: JTokenType.String } tooltipBackgroundName)
+        if (obj[nameof(TooltipBackground)] is JValue { Type: JTokenType.String } tokenTooltipBackgroundName)
         {
-            var fileName = tooltipBackgroundName.Value<string>();
-            GameTexture texture = null;
-            if (!string.IsNullOrWhiteSpace(fileName))
-            {
-                texture = GameContentManager.Current?.GetTexture(Content.TextureType.Gui, fileName);
-            }
-
-            _tooltipBackgroundName = fileName;
-            _tooltipBackground = texture;
+            var tooltipBackgroundName = tokenTooltipBackgroundName.Value<string>();
+            TooltipBackgroundName = tooltipBackgroundName;
         }
 
         if (obj.TryGetValue(nameof(TooltipFont), out var tokenTooltipFont) && tokenTooltipFont is JValue { Type: JTokenType.String } valueTooltipFont)
@@ -1513,23 +1700,28 @@ public partial class Base : IDisposable
             innerPanel.LoadJson(tokenInnerPanel);
         }
 
-        if (obj[nameof(Children)] != null)
+        if (obj.TryGetValue(nameof(Children), out var tokenChildren) && tokenChildren is JObject objectChildren)
         {
-            var children = obj[nameof(Children)];
-            foreach (JProperty tkn in children)
-            {
-                var name = tkn.Name;
-                foreach (var ctrl in mChildren)
-                {
-                    if (ctrl.Name == name)
-                    {
-                        ctrl.LoadJson(tkn.First);
-                    }
-                }
-            }
+            RunOnMainThread(LoadChildrenJson, this, objectChildren);
         }
 
         Invalidate(alsoInvalidateParent: true);
+    }
+
+    private static void LoadChildrenJson(Base @this, JObject objectChildren)
+    {
+        foreach (var child in @this._children)
+        {
+            if (child._name is not { } name || string.IsNullOrWhiteSpace(name))
+            {
+                continue;
+            }
+
+            if (objectChildren.TryGetValue(name, out var tokenChild))
+            {
+                child.LoadJson(tokenChild);
+            }
+        }
     }
 
     public virtual void ProcessAlignments()
@@ -1576,11 +1768,6 @@ public partial class Base : IDisposable
         {
             child?.ProcessAlignments();
         }
-    }
-
-    private bool HasNamedChildren()
-    {
-        return mChildren?.Any(ctrl => !string.IsNullOrEmpty(ctrl?.Name)) ?? false;
     }
 
     public event GwenEventHandler<VisibilityChangedEventArgs>? VisibilityChanged;
@@ -1631,33 +1818,7 @@ public partial class Base : IDisposable
         Canvas?.AddDelayedDelete(this);
     }
 
-    private readonly ConcurrentQueue<Action> _deferredActions = [];
-
-    public void Defer(Action action)
-    {
-        _deferredActions.Enqueue(action);
-        Invalidate();
-    }
-
-    public override string ToString()
-    {
-        if (this is MenuItem)
-        {
-            return "[MenuItem: " + (this as MenuItem).Text + "]";
-        }
-
-        if (this is Label)
-        {
-            return "[Label: " + (this as Label).Text + "]";
-        }
-
-        if (this is Text)
-        {
-            return "[Text: " + (this as Text).DisplayedText + "]";
-        }
-
-        return GetType().ToString();
-    }
+    public override string ToString() => _cachedToString ??= InternalToString();
 
     /// <summary>
     ///     Enables the control.
@@ -1722,7 +1883,7 @@ public partial class Base : IDisposable
     {
         var tooltip = Tooltip;
 
-        if (mHideToolTip || string.IsNullOrWhiteSpace(text))
+        if (!_tooltipEnabled || string.IsNullOrWhiteSpace(text))
         {
             if (Tooltip is { Parent: not null })
             {
@@ -1781,24 +1942,20 @@ public partial class Base : IDisposable
     /// <param name="recursive">Determines whether the operation should be carried recursively.</param>
     protected virtual void InvalidateChildren(bool recursive = false)
     {
-        for (int i = 0; i < mChildren.Count; i++)
+        RunOnMainThread(InvalidateChildren, this, recursive);
+
+        _innerPanel?.Invalidate();
+        _innerPanel?.InvalidateChildren(recursive: true);
+    }
+
+    private static void InvalidateChildren(Base @this, bool recursive)
+    {
+        foreach (var node in @this._children)
         {
-            mChildren[i]?.Invalidate();
+            node.Invalidate();
             if (recursive)
             {
-                mChildren[i]?.InvalidateChildren(true);
-            }
-        }
-
-        if (_innerPanel != null)
-        {
-            foreach (var child in _innerPanel.mChildren)
-            {
-                child?.Invalidate();
-                if (recursive)
-                {
-                    child?.InvalidateChildren(true);
-                }
+                node.InvalidateChildren(true);
             }
         }
     }
@@ -1811,16 +1968,18 @@ public partial class Base : IDisposable
     /// </remarks>
     public virtual void Invalidate()
     {
-        if (!_needsLayout)
+        if (!_layoutDirty)
         {
-            _needsLayout = true;
+            _layoutDirty = true;
         }
 
-        if (!mCacheTextureDirty)
+        if (!_cacheTextureDirty)
         {
-            mCacheTextureDirty = true;
+            _cacheTextureDirty = true;
         }
     }
+
+    protected static void Invalidate(Base @this) => @this.Invalidate();
 
     public void Invalidate(bool alsoInvalidateParent)
     {
@@ -1831,200 +1990,318 @@ public partial class Base : IDisposable
         }
     }
 
-    public virtual void MoveBefore(Base other)
+    public void MoveBefore(Base other)
     {
-        if (other == this)
+        if (ReferenceEquals(this, other))
         {
             return;
         }
 
-        if (other.Parent is not {} otherParent)
+        if (_host is not { } parent)
         {
-            // If the other component has no parent we can't move before it
             return;
         }
 
-        if (Parent is { } parent && parent != otherParent)
+        parent.RunOnMainThread(MoveChildBeforeOther, this, other);
+    }
+
+    private static void MoveChildBeforeOther(Base @this, Base childToMove, Base other)
+    {
+        if (other.Parent != @this)
         {
-            // If we have a parent and the parent is not the same as the other component, we should not move
-            // This won't be hit if we have no parent, which will be treated as an insertion
             return;
         }
 
-        var parentChildren = otherParent.Children;
-        var otherIndex = parentChildren.IndexOf(other);
+        var children = @this.HostedChildren;
+        var otherIndex = children.IndexOf(other);
         if (otherIndex < 0)
         {
             ApplicationContext.Context.Value?.Logger.LogError(
-                "Possible race condition detected: Component '{Other}' is not in its parent's ({Parent}) list of children",
-                string.IsNullOrWhiteSpace(other.Name) ? other.GetType().GetName(qualified: true) : other.Name,
-                string.IsNullOrWhiteSpace(otherParent.Name) ? otherParent.GetType().GetName(qualified: true) : otherParent.Name
+                "Possible race condition detected: '{Other}' is not a child of '{Parent}'",
+                other.CanonicalName,
+                @this.CanonicalName
             );
             return;
         }
 
-        var ownIndex = parentChildren.IndexOf(this);
+        var ownIndex = children.IndexOf(childToMove);
+
+
         if (ownIndex < 0)
         {
-            // If we have no parent yet, add it
-            ownIndex = otherParent.AddChild(this);
+            children.Insert(otherIndex, childToMove);
+            return;
         }
 
         var insertionIndex = otherIndex;
-        if (ownIndex < insertionIndex)
+        if (ownIndex < otherIndex)
         {
-            // If the component being moved is already ordered before the other component the insertion
-            // index will decrease by one after we Remove() below, so we need to decrement it
             --insertionIndex;
-
-            if (ownIndex == insertionIndex)
-            {
-                // Skip this since we're not actually moving it
-                return;
-            }
         }
 
-        _ = parentChildren.Remove(this);
-        parentChildren.Insert(insertionIndex, this);
+        if (ownIndex == insertionIndex)
+        {
+            return;
+        }
+
+        children.Remove(childToMove);
+        children.Insert(insertionIndex, childToMove);
     }
 
-    public virtual void MoveAfter(Base other)
+    public void MoveAfter(Base other)
     {
-        if (other == this)
+        if (ReferenceEquals(this, other))
         {
             return;
         }
 
-        if (other.Parent is not {} otherParent)
+        if (_host is not { } parent)
         {
-            // If the other component has no parent we can't move before it
             return;
         }
 
-        if (Parent is { } parent && parent != otherParent)
+        parent.RunOnMainThread(MoveChildAfterOther, this, other);
+    }
+
+    private List<Base> HostedChildren => _innerPanel?.HostedChildren ?? _children;
+
+    private static void MoveChildAfterOther(Base @this, Base childToMove, Base other)
+    {
+        if (other.Parent != @this)
         {
-            // If we have a parent and the parent is not the same as the other component, we should not move
-            // This won't be hit if we have no parent, which will be treated as an insertion
             return;
         }
 
-        var parentChildren = otherParent.Children;
-        var otherIndex = parentChildren.IndexOf(other);
+        var children = @this.HostedChildren;
+        var otherIndex = children.IndexOf(other);
         if (otherIndex < 0)
         {
             ApplicationContext.Context.Value?.Logger.LogError(
-                "Possible race condition detected: Component '{Other}' is not in its parent's ({Parent}) list of children",
-                string.IsNullOrWhiteSpace(other.Name) ? other.GetType().GetName(qualified: true) : other.Name,
-                string.IsNullOrWhiteSpace(otherParent.Name) ? otherParent.GetType().GetName(qualified: true) : otherParent.Name
+                "Possible race condition detected: '{Other}' is not a child of '{Parent}'",
+                other.CanonicalName,
+                @this.CanonicalName
             );
             return;
         }
 
-        var ownIndex = parentChildren.IndexOf(this);
+        var ownIndex = children.IndexOf(childToMove);
+
         if (ownIndex < 0)
         {
-            // If we have no parent yet, add it
-            ownIndex = otherParent.AddChild(this);
+            // If we have no parent yet, insert it
+            children.Insert(otherIndex + 1, childToMove);
+            return;
         }
 
         var insertionIndex = otherIndex;
         if (ownIndex > insertionIndex)
         {
-            // If the component being moved is already ordered after the other component the insertion
-            // index will decrease by one after we Remove() below, so we need to decrement it
             ++insertionIndex;
+        }
 
-            if (ownIndex == insertionIndex)
+        if (ownIndex == insertionIndex)
+        {
+            return;
+        }
+
+        children.Remove(childToMove);
+        children.Insert(insertionIndex, childToMove);
+    }
+
+    public void SortChildrenBy<TSortKey>(Func<Base?, TSortKey> keySelector) where TSortKey : IComparable<TSortKey>
+    {
+        _children.Sort(
+            (a, b) =>
             {
-                // Skip this since we're not actually moving it
-                return;
+                TSortKey keyB = keySelector(b);
+
+                if (keySelector(a) is { } keyA)
+                {
+                    return keyA.CompareTo(keyB);
+                }
+
+                // Not sure why no matter what I do that the static analysis refuses to acknowledge that it can be null,
+                // so I'm just disabling it instead so it doesn't get hit by auto-formatting
+                // ReSharper disable once ConditionalAccessQualifierIsNonNullableAccordingToAPIContract
+                return -keyB?.CompareTo(default) ?? 0;
+            }
+        );
+    }
+
+    public void ClearChildren(bool dispose = false) => RunOnMainThread(ClearChildren, this, dispose);
+
+    private static void ClearChildren(Base @this, bool dispose)
+    {
+        if (@this is Modal)
+        {
+            ApplicationContext.CurrentContext.Logger.LogTrace(
+                "Clearing {ChildCount} children of Modal {Name}",
+                @this._children.Count,
+                @this.CanonicalName
+            );
+        }
+
+        if (dispose)
+        {
+            foreach (var child in @this.HostedChildren)
+            {
+                child.Dispose();
             }
         }
 
-        _ = parentChildren.Remove(this);
-        parentChildren.Insert(insertionIndex, this);
+        @this.HostedChildren.Clear();
+        @this.Invalidate();
     }
+
+    public void Insert(int index, Base node) => RunOnMainThread(Insert, this, index, node);
+
+    private static void Insert(Base @this, int index, Base node)
+    {
+        @this._children.Insert(index, node);
+    }
+
+    public void Remove(Base node) => RunOnMainThread(Remove, this, node);
+
+    private static void Remove(Base @this, Base node)
+    {
+        var index = @this._children.BinarySearch(node);
+        if (index < 0)
+        {
+            return;
+        }
+
+        RemoveAt(@this, index);
+    }
+
+    public void RemoveAt(int index) => RunOnMainThread(RemoveAt, this, index);
+
+    private static void RemoveAt(Base @this, int index)
+    {
+        if (@this is Modal)
+        {
+            ApplicationContext.CurrentContext.Logger.LogTrace(
+                "Removing child at {Index} of Modal {Name}",
+                index,
+                @this.CanonicalName
+            );
+        }
+        @this._children.RemoveAt(index);
+    }
+
+    public int IndexOf(Base? node)
+    {
+        if (node?.Parent != this)
+        {
+            return -1;
+        }
+
+        return RunOnMainThread(IndexOf, node);
+    }
+
+    private static int IndexOf(Base @this, Base node) => @this._children.IndexOf(node);
+
+    public int IndexOf(Func<Base?, bool> predicate) => RunOnMainThread(IndexOf, predicate);
+
+    private static int IndexOf(Base @this, Func<Base?, bool> predicate)
+    {
+        for (var index = 0; index < @this._children.Count; ++index)
+        {
+            if (predicate(@this._children[index]))
+            {
+                return index;
+            }
+        }
+
+        return -1;
+    }
+
+    public int LastIndexOf(Func<Base?, bool> predicate) => RunOnMainThread(LastIndexOf, predicate);
+
+    private static int LastIndexOf(Base @this, Func<Base?, bool> predicate)
+    {
+        for (var index = @this._children.Count - 1; index >= 0; ++index)
+        {
+            if (predicate(@this._children[index]))
+            {
+                return index;
+            }
+        }
+
+        return -1;
+    }
+
+    public void ResortChild<TKey>(Base child, Func<Base?, TKey?> keySelector) where TKey : IComparable<TKey>
+    {
+        if (child.Parent != this)
+        {
+            return;
+        }
+
+        RunOnMainThread(ResortChild, this, child, keySelector);
+    }
+
+    private static void ResortChild<TKey>(Base @this, Base child, Func<Base?, TKey?> keySelector)
+        where TKey : IComparable<TKey> =>
+        @this._children.Resort(child, keySelector);
 
     /// <summary>
     ///     Sends the control to the bottom of paren't visibility stack.
     /// </summary>
-    public virtual void SendToBack()
+    public void SendToBack() => RunOnMainThread(SendToBack, this);
+
+    private static void SendToBack(Base @this)
     {
-        if (mActualParent == null)
+        if (@this._parent == null)
         {
             return;
         }
 
-        if (mActualParent.mChildren.Count == 0)
+        if (@this._parent._children.Count == 0)
         {
             return;
         }
 
-        if (mActualParent.mChildren.First() == this)
+        if (@this._parent._children.First() == @this)
         {
             return;
         }
 
-        mActualParent.mChildren.Remove(this);
-        mActualParent.mChildren.Insert(0, this);
+        @this._parent._children.Remove(@this);
+        @this._parent._children.Insert(0, @this);
 
-        InvalidateParent();
+        @this.InvalidateParent();
     }
 
     /// <summary>
     ///     Brings the control to the top of paren't visibility stack.
     /// </summary>
-    public virtual void BringToFront()
+    public void BringToFront() => RunOnMainThread(BringToFront, this);
+
+    private static void BringToFront(Base @this)
     {
-        if (mParent != null && mParent is Modal modal)
+        if (@this._host is Modal modal)
         {
             modal.BringToFront();
         }
 
-        var last = mActualParent?.mChildren.LastOrDefault();
-        if (last == default || last == this)
+        var actualParent = @this._parent;
+        // Using null propagation somehow breaks the static analysis after the return
+        // ReSharper disable once UseNullPropagation
+        if (actualParent is null)
         {
             return;
         }
 
-        mActualParent.mChildren.Remove(this);
-        mActualParent.mChildren.Add(this);
-        InvalidateParent();
-        Redraw();
-    }
-
-    public virtual void BringNextToControl(Base child, bool behind)
-    {
-        if (null == mActualParent)
+        var last = actualParent._children.LastOrDefault();
+        if (last == default || last == @this)
         {
             return;
         }
 
-        mActualParent.mChildren.Remove(this);
-
-        // todo: validate
-        var idx = mActualParent.mChildren.IndexOf(child);
-        if (idx == mActualParent.mChildren.Count - 1)
-        {
-            BringToFront();
-
-            return;
-        }
-
-        if (behind)
-        {
-            ++idx;
-
-            if (idx == mActualParent.mChildren.Count - 1)
-            {
-                BringToFront();
-
-                return;
-            }
-        }
-
-        mActualParent.mChildren.Insert(idx, this);
-        InvalidateParent();
+        actualParent._children.Remove(@this);
+        actualParent._children.Add(@this);
+        @this.InvalidateParent();
+        @this.Redraw();
     }
 
     /// <summary>
@@ -2035,14 +2312,14 @@ public partial class Base : IDisposable
     /// <returns>The first element that matches the conditions defined by the specified predicate, if found; otherwise, the default value for type <see cref="Base" />.</returns>
     public virtual Base Find(Predicate<Base> predicate, bool recurse = false)
     {
-        var child = mChildren.Find(predicate);
+        var child = _children.Find(predicate);
         if (child != null)
         {
             return child;
         }
 
         return recurse
-            ? mChildren.Select(selectChild => selectChild?.Find(predicate, true)).FirstOrDefault()
+            ? _children.Select(selectChild => selectChild?.Find(predicate, true)).FirstOrDefault()
             : default;
     }
 
@@ -2076,11 +2353,11 @@ public partial class Base : IDisposable
     {
         var children = new List<Base>();
 
-        children.AddRange(mChildren.FindAll(predicate));
+        children.AddRange(_children.FindAll(predicate));
 
         if (recurse)
         {
-            children.AddRange(mChildren.SelectMany(selectChild => selectChild?.FindAll(predicate, true)));
+            children.AddRange(_children.SelectMany(selectChild => selectChild?.FindAll(predicate, true)));
         }
 
         return children;
@@ -2129,30 +2406,30 @@ public partial class Base : IDisposable
     /// <param name="dim">Determines whether all the background should be dimmed.</param>
     public void MakeModal(bool dim = false)
     {
-        if (mModal != null)
+        if (_modal != null)
         {
             return;
         }
 
-        mModal = new Modal(Canvas)
+        _modal = new Modal(Canvas)
         {
             ShouldDrawBackground = dim,
         };
 
-        mOldParent = Parent;
-        Parent = mModal;
+        _previousParent = Parent;
+        Parent = _modal;
     }
 
     public void RemoveModal()
     {
-        if (mModal == null)
+        if (_modal is not { } modal)
         {
             return;
         }
 
-        Parent = mOldParent;
-        Canvas?.RemoveChild(mModal, false);
-        mModal = null;
+        Parent = _previousParent;
+        Canvas?.RemoveChild(modal, false);
+        _modal = null;
     }
 
     /// <summary>
@@ -2161,28 +2438,30 @@ public partial class Base : IDisposable
     /// <remarks>
     ///     If InnerPanel is not null, it will become the parent.
     /// </remarks>
-    /// <param name="child">Control to be added as a child.</param>
+    /// <param name="node">Control to be added as a child.</param>
     /// <param name="setParent"></param>
-    public virtual int AddChild(Base child)
-    {
-        int childIndex;
+    public void AddChild(Base node) => RunOnMainThread(AddChild, this, node);
 
-        if (_innerPanel == null)
+    private static void AddChild(Base @this, Base node)
+    {
+        if (@this._innerPanel == null)
         {
-            childIndex = mChildren.Count;
-            mChildren.Add(child);
-            child.mActualParent = this;
+            @this._children.Add(node);
+            node._parent = @this;
         }
         else
         {
-            childIndex = _innerPanel.AddChild(child);
+            @this._innerPanel.AddChild(node);
         }
 
-        child.DrawDebugOutlines = DrawDebugOutlines;
+        if (node._dock != default)
+        {
+            @this.InvalidateDock();
+        }
 
-        OnChildAdded(child);
+        node.DrawDebugOutlines = @this.DrawDebugOutlines;
 
-        return childIndex;
+        @this.OnChildAdded(node);
     }
 
     /// <summary>
@@ -2190,28 +2469,55 @@ public partial class Base : IDisposable
     /// </summary>
     /// <param name="child">Child to be removed.</param>
     /// <param name="dispose">Determines whether the child should be disposed (added to delayed delete queue).</param>
-    public virtual void RemoveChild(Base child, bool dispose)
+    public virtual void RemoveChild(Base child, bool dispose) => RunOnMainThread(RemoveChild, this, child, dispose);
+
+    private static void RemoveChild(Base @this, Base child, bool dispose)
     {
-        // If we removed our innerpanel
+        // If we removed our inner panel
         // remove our pointer to it
-        if (_innerPanel == child)
+        if (@this._innerPanel == child)
         {
-            mChildren.Remove(_innerPanel);
-            _innerPanel.DelayedDelete();
-            _innerPanel = null;
+            try
+            {
+                if (@this is Modal)
+                {
+                    ApplicationContext.CurrentContext.Logger.LogTrace(
+                        "Removing {ChildName} (inner panel) from Modal {Name} (Thread {ThreadId})",
+                        child.CanonicalName,
+                        @this.CanonicalName,
+                        Environment.CurrentManagedThreadId
+                    );
+                }
+                @this._children.Remove(child);
+                child.DelayedDelete();
+                @this._innerPanel = null;
+            }
+            catch (NullReferenceException)
+            {
+                throw;
+            }
 
             return;
         }
 
-        if (_innerPanel != null && _innerPanel.Children.Contains(child))
+        if (@this._innerPanel is { } innerPanel && innerPanel.Children.Contains(child))
         {
-            _innerPanel.RemoveChild(child, dispose);
+            innerPanel.RemoveChild(child, dispose);
 
             return;
         }
 
-        mChildren.Remove(child);
-        OnChildRemoved(child);
+        if (@this is Modal)
+        {
+            ApplicationContext.CurrentContext.Logger.LogTrace(
+                "Removing {ChildName} (normal child) from Modal {Name} (Thread {ThreadId})",
+                child.CanonicalName,
+                @this.CanonicalName,
+                Environment.CurrentManagedThreadId
+            );
+        }
+        @this._children.Remove(child);
+        @this.OnChildRemoved(child);
 
         if (dispose)
         {
@@ -2225,9 +2531,9 @@ public partial class Base : IDisposable
     public virtual void DeleteAllChildren()
     {
         // todo: probably shouldn't invalidate after each removal
-        while (mChildren.Count > 0)
+        while (_children.Count > 0)
         {
-            RemoveChild(mChildren[0], true);
+            RemoveChild(_children[0], true);
         }
     }
 
@@ -2389,6 +2695,13 @@ public partial class Base : IDisposable
     /// </returns>
     public virtual bool SetBounds(float x, float y, float width, float height) => SetBounds((int) x, (int) y, (int) width, (int) height);
 
+    protected virtual void OnMaximumSizeChanged(Point oldSize, Point newSize)
+    {
+    }
+    protected virtual void OnMinimumSizeChanged(Point oldSize, Point newSize)
+    {
+    }
+
     protected virtual void OnSizeChanged(Point oldSize, Point newSize)
     {
         Parent?.OnChildSizeChanged(this, oldSize, newSize);
@@ -2409,14 +2722,14 @@ public partial class Base : IDisposable
         width = Math.Max(0, width);
         height = Math.Max(0, height);
 
-        if (mBounds.X == x && mBounds.Y == y && mBounds.Width == width && mBounds.Height == height)
+        if (_bounds.X == x && _bounds.Y == y && _bounds.Width == width && _bounds.Height == height)
         {
             return false;
         }
 
         var oldBounds = Bounds;
 
-        var newBounds = mBounds with
+        var newBounds = _bounds with
         {
             X = x,
             Y = y,
@@ -2437,9 +2750,9 @@ public partial class Base : IDisposable
             );
         }
 
-        mBounds = newBounds;
+        _bounds = newBounds;
 
-        var margin = mMargin;
+        var margin = _margin;
         Rectangle outerBounds = new(newBounds);
         outerBounds.X -= margin.Left;
         outerBounds.Y -= margin.Top;
@@ -2464,6 +2777,12 @@ public partial class Base : IDisposable
 
         if (oldBounds.Size != newBounds.Size)
         {
+            if (_cacheToTexture)
+            {
+                Skin.Renderer.Ctt.DisposeCachedTexture(this);
+                Redraw();
+            }
+
             OnSizeChanged(oldBounds.Size, newBounds.Size);
             SizeChanged?.Invoke(
                 this,
@@ -2474,6 +2793,12 @@ public partial class Base : IDisposable
                 }
             );
             ProcessAlignments();
+        }
+
+        if (_dock != Pos.None)
+        {
+            InvalidateDock();
+            InvalidateParentDock();
         }
 
         BoundsChanged?.Invoke(
@@ -2487,6 +2812,18 @@ public partial class Base : IDisposable
 
         return true;
     }
+
+    public void InvalidateDock()
+    {
+        if (!_dockDirty)
+        {
+            _dockDirty = true;
+        }
+
+        Invalidate();
+    }
+
+    protected void InvalidateParentDock() => _parent?.InvalidateDock();
 
     /// <summary>
     /// Positions the control inside its parent.
@@ -2545,11 +2882,9 @@ public partial class Base : IDisposable
     /// <param name="newBounds"></param>
     protected virtual void OnBoundsChanged(Rectangle oldBounds, Rectangle newBounds)
     {
-        //Anything that needs to update on size changes
-        //Iterate my children and tell them I've changed
         Parent?.OnChildBoundsChanged(this, oldBounds, newBounds);
 
-        if (mBounds.Width != oldBounds.Width || mBounds.Height != oldBounds.Height)
+        if (_bounds.Width != oldBounds.Width || _bounds.Height != oldBounds.Height)
         {
             Invalidate();
         }
@@ -2563,9 +2898,9 @@ public partial class Base : IDisposable
     /// </summary>
     protected virtual void OnScaleChanged()
     {
-        for (int i = 0; i < mChildren.Count; i++)
+        for (int i = 0; i < _children.Count; i++)
         {
-            mChildren[i].OnScaleChanged();
+            _children[i].OnScaleChanged();
         }
     }
 
@@ -2574,6 +2909,10 @@ public partial class Base : IDisposable
     /// </summary>
     protected virtual void OnChildBoundsChanged(Base child, Rectangle oldChildBounds, Rectangle newChildBounds)
     {
+        if ((child.Dock & ~Pos.Fill) != 0)
+        {
+            InvalidateDock();
+        }
     }
 
     /// <summary>
@@ -2624,7 +2963,7 @@ public partial class Base : IDisposable
         }
 
         // Render the control and its children if the cache is dirty and the clip region is visible
-        if (mCacheTextureDirty && renderer.ClipRegionVisible)
+        if (_cacheTextureDirty && renderer.ClipRegionVisible)
         {
             if (ClipContents)
             {
@@ -2644,8 +2983,7 @@ public partial class Base : IDisposable
             // Render the control
             Render(skin);
 
-            var childrenToRender = mChildren.ToArray();
-            childrenToRender = OrderChildrenForRendering(childrenToRender.Where(child => child.IsVisible));
+            var childrenToRender = OrderChildrenForRendering(_children.Where(IsNodeVisible));
 
             foreach (var child in childrenToRender)
             {
@@ -2656,7 +2994,7 @@ public partial class Base : IDisposable
             if (ShouldCacheToTexture)
             {
                 cache.FinishCacheTexture(this);
-                mCacheTextureDirty = false;
+                _cacheTextureDirty = false;
             }
         }
 
@@ -2672,6 +3010,8 @@ public partial class Base : IDisposable
         }
     }
 
+    private static bool IsNodeVisible(Base node) => node.IsVisibleInTree;
+
     /// <summary>
     ///     Rendering logic implementation.
     /// </summary>
@@ -2680,13 +3020,15 @@ public partial class Base : IDisposable
     {
         // If this control has a different skin,
         // then so does its children.
-        if (mSkin != null)
+        if (_skin != null)
         {
-            skin = mSkin;
+            skin = _skin;
         }
 
         // Do think
         Think();
+
+        UpdateColors();
 
         var render = skin.Renderer;
 
@@ -2712,7 +3054,7 @@ public partial class Base : IDisposable
     {
         var oldRenderOffset = skin.Renderer.RenderOffset;
         skin.Renderer.AddRenderOffset(Bounds);
-        foreach (var child in mChildren)
+        foreach (var child in _children)
         {
             if (child.IsHidden)
             {
@@ -2784,11 +3126,15 @@ public partial class Base : IDisposable
         //Render myself first
         Render(skin);
 
-        var childrenToRender = mChildren.ToArray();
-        childrenToRender = OrderChildrenForRendering(childrenToRender.Where(child => child.IsVisible));
+        var childrenToRender = OrderChildrenForRendering(_children.Where(IsNodeVisible));
 
         foreach (var child in childrenToRender)
         {
+            if (child is Label label && (label.Text?.Contains("resources/gui/mainmenu_buttonregister.png") ?? false))
+            {
+                label.ToString();
+            }
+
             child.DoRender(skin);
         }
 
@@ -2811,21 +3157,21 @@ public partial class Base : IDisposable
     /// <param name="doChildren">Deterines whether to change children skin.</param>
     public virtual void SetSkin(Skin.Base skin, bool doChildren = false)
     {
-        if (mSkin == skin)
+        if (_skin == skin)
         {
             return;
         }
 
-        mSkin = skin;
+        _skin = skin;
         Invalidate();
         Redraw();
         OnSkinChanged(skin);
 
         if (doChildren)
         {
-            for (int i = 0; i < mChildren.Count; i++)
+            for (int i = 0; i < _children.Count; i++)
             {
-                mChildren[i].SetSkin(skin, true);
+                _children[i].SetSkin(skin, true);
             }
         }
     }
@@ -2844,9 +3190,9 @@ public partial class Base : IDisposable
     /// <param name="delta">Scroll delta.</param>
     protected virtual bool OnMouseWheeled(int delta)
     {
-        if (mActualParent != null)
+        if (_parent != null)
         {
-            return mActualParent.OnMouseWheeled(delta);
+            return _parent.OnMouseWheeled(delta);
         }
 
         return false;
@@ -2871,9 +3217,9 @@ public partial class Base : IDisposable
     /// <param name="delta">Scroll delta.</param>
     protected virtual bool OnMouseHWheeled(int delta)
     {
-        if (mActualParent != null)
+        if (_parent != null)
         {
-            return mActualParent.OnMouseHWheeled(delta);
+            return _parent.OnMouseHWheeled(delta);
         }
 
         return false;
@@ -3214,15 +3560,10 @@ public partial class Base : IDisposable
             }
         }
 
-        var children = mChildren.ToArray();
-        // Check children in reverse order (last added first).
-        for (int childIndex = children.Length - 1; childIndex >= 0; childIndex--)
+        var possibleNode = RunOnMainThread(FindComponentAt, new ComponentAtParams(new Point(x, y), filters), invalidate: false);
+        if (possibleNode is not null)
         {
-            var child = children[childIndex];
-            if (child.GetComponentAt(x - child.X, y - child.Y, filters) is { } descendant)
-            {
-                return descendant;
-            }
+            return possibleNode;
         }
 
         if (this is Text)
@@ -3235,6 +3576,24 @@ public partial class Base : IDisposable
         if (MouseInputEnabled || filters.HasFlag(NodeFilter.IncludeMouseInputDisabled))
         {
             return this;
+        }
+
+        return null;
+    }
+
+    private record struct ComponentAtParams(Point Position, NodeFilter Filters);
+
+    private static Base? FindComponentAt(Base @this, ComponentAtParams componentAtParams)
+    {
+        var ((x, y), filters) = componentAtParams;
+        // Check children in reverse order (last added first).
+        for (int childIndex = @this._children.Count - 1; childIndex >= 0; childIndex--)
+        {
+            var child = @this._children[childIndex];
+            if (child.GetComponentAt(x - child.X, y - child.Y, filters) is { } descendant)
+            {
+                return descendant;
+            }
         }
 
         return null;
@@ -3256,37 +3615,57 @@ public partial class Base : IDisposable
         }
     }
 
-    protected virtual bool ShouldSkipLayout => IsHidden && !ToolTip.IsActiveTooltip(this);
+    protected virtual bool ShouldSkipLayout => !(_visible || ToolTip.IsActiveTooltip(this));
 
-    public int NodeCount => 1 + mChildren.Sum(child => child.NodeCount);
+    public int NodeCount => 1 + _children.Sum(child => child.NodeCount);
 
-    protected virtual void Prelayout(Skin.Base skin)
+    protected virtual void DoPrelayout(Skin.Base skin)
     {
 
     }
 
     protected void DoLayoutIfNeeded(Skin.Base skin)
     {
-        if (!_needsLayout)
+        if (!_layoutDirty)
         {
             return;
         }
 
-        _needsLayout = false;
+        _layoutDirty = false;
         Layout(skin);
     }
 
     private Point _requiredSizeForDockFillNodes;
 
+    protected void InvokeThreadQueue()
+    {
+        if (_pendingThreadQueues < 1)
+        {
+            return;
+        }
+
+        if (_threadQueue.InvokePending())
+        {
+            UpdatePendingThreadQueues(-1);
+        }
+
+        var count = _children.Count;
+        for (var index = 0; index < count; index++)
+        {
+            var child = _children[index];
+            child.InvokeThreadQueue();
+        }
+    }
+
     /// <summary>
     ///     Recursively lays out the control's interior according to alignment, margin, padding, dock etc.
     /// </summary>
     /// <param name="skin">Skin to use.</param>
-    protected virtual void RecurseLayout(Skin.Base skin)
+    protected void RecurseLayout(Skin.Base skin)
     {
-        if (mSkin != null)
+        if (_skin != null)
         {
-            skin = mSkin;
+            skin = _skin;
         }
 
         if (ShouldSkipLayout)
@@ -3294,10 +3673,14 @@ public partial class Base : IDisposable
             return;
         }
 
-        var children = mChildren.ToArray();
-        foreach (var child in children)
+        foreach (var child in _children)
         {
-            child.Prelayout(skin);
+            child.DoPrelayout(skin);
+
+            _preLayoutActionsParent.IsExecuting = true;
+            PreLayout.InvokePending();
+            _preLayoutActionsParent.IsExecuting = false;
+
             child.BeforeLayout?.Invoke(child, EventArgs.Empty);
         }
 
@@ -3315,277 +3698,367 @@ public partial class Base : IDisposable
             ProcessAlignments();
         }
 
-        var remainingBounds = RenderBounds;
-
-        // Adjust bounds for padding
-        remainingBounds.X += mPadding.Left;
-        remainingBounds.Width -= mPadding.Left + mPadding.Right;
-        remainingBounds.Y += mPadding.Top;
-        remainingBounds.Height -= mPadding.Top + mPadding.Bottom;
-
-        var dockChildSpacing = DockChildSpacing;
-
-        var directionalDockChildren =
-            children.Where(child => !child.ShouldSkipLayout && !child.Dock.HasFlag(Pos.Fill)).ToArray();
-        var dockFillChildren =
-            children.Where(child => !child.ShouldSkipLayout && child.Dock.HasFlag(Pos.Fill)).ToArray();
-
-        foreach (var child in directionalDockChildren)
+        if (_dockDirty)
         {
-            var childDock = child.Dock;
+            _dockDirty = false;
 
-            var childMargin = child.Margin;
-            var childMarginH = childMargin.Left + childMargin.Right;
-            var childMarginV = childMargin.Top + childMargin.Bottom;
+            var remainingBounds = RenderBounds;
 
-            var childOuterWidth = childMarginH + child.Width;
-            var childOuterHeight = childMarginV + child.Height;
+            // Adjust bounds for padding
+            remainingBounds.X += _padding.Left;
+            remainingBounds.Width -= _padding.Left + _padding.Right;
+            remainingBounds.Y += _padding.Top;
+            remainingBounds.Height -= _padding.Top + _padding.Bottom;
 
-            var availableWidth = remainingBounds.Width - childMarginH;
-            var availableHeight = remainingBounds.Height - childMarginV;
+            var dockChildSpacing = DockChildSpacing;
 
-            var childFitsContentWidth = false;
-            var childFitsContentHeight = false;
+            var directionalDockChildren =
+                _children.Where(child => !child.ShouldSkipLayout && !child.Dock.HasFlag(Pos.Fill)).ToArray();
+            var dockFillChildren =
+                _children.Where(child => !child.ShouldSkipLayout && child.Dock.HasFlag(Pos.Fill)).ToArray();
 
-            if (child is ISmartAutoSizeToContents smartAutoSizeToContents)
+            foreach (var child in directionalDockChildren)
             {
-                childFitsContentWidth = smartAutoSizeToContents.AutoSizeToContentWidth;
-                childFitsContentHeight = smartAutoSizeToContents.AutoSizeToContentHeight;
-            } else if (child is IAutoSizeToContents { AutoSizeToContents: true })
-            {
-                childFitsContentWidth = true;
-                childFitsContentHeight = true;
-            }
+                var childDock = child.Dock;
 
-            if (childDock.HasFlag(Pos.Left))
-            {
-                var height = childFitsContentHeight
-                    ? child.Height
-                    : availableHeight;
+                var childMargin = child.Margin;
+                var childMarginH = childMargin.Left + childMargin.Right;
+                var childMarginV = childMargin.Top + childMargin.Bottom;
 
-                var y = remainingBounds.Y + childMargin.Top;
-                if (childDock.HasFlag(Pos.CenterV))
+                var childOuterWidth = childMarginH + child.Width;
+                var childOuterHeight = childMarginV + child.Height;
+
+                var availableWidth = remainingBounds.Width - childMarginH;
+                var availableHeight = remainingBounds.Height - childMarginV;
+
+                var childFitsContentWidth = false;
+                var childFitsContentHeight = false;
+
+                switch (child)
                 {
-                    height = child.Height;
-                    var extraY = Math.Max(0, availableHeight - height) / 2;
-                    if (extraY != 0)
+                    case ISmartAutoSizeToContents smartAutoSizeToContents:
+                        childFitsContentWidth = smartAutoSizeToContents.AutoSizeToContentWidth;
+                        childFitsContentHeight = smartAutoSizeToContents.AutoSizeToContentHeight;
+                        break;
+                    case IAutoSizeToContents { AutoSizeToContents: true }:
+                        childFitsContentWidth = true;
+                        childFitsContentHeight = true;
+                        break;
+                    case IFitHeightToContents { FitHeightToContents: true }:
+                        childFitsContentHeight = true;
+                        break;
+                }
+
+                if (childDock.HasFlag(Pos.Left))
+                {
+                    var height = childFitsContentHeight
+                        ? child.Height
+                        : availableHeight;
+
+                    var y = remainingBounds.Y + childMargin.Top;
+                    if (childDock.HasFlag(Pos.CenterV))
                     {
-                        y += extraY;
+                        height = child.Height;
+                        var extraY = Math.Max(0, availableHeight - height) / 2;
+                        if (extraY != 0)
+                        {
+                            y += extraY;
+                        }
                     }
-                }
-                else if (childDock.HasFlag(Pos.Bottom))
-                {
-                    y = remainingBounds.Bottom - (childMargin.Bottom + child.Height);
-                }
-                else if (!childDock.HasFlag(Pos.Top))
-                {
-                    var extraY = Math.Max(0, availableHeight - height) / 2;
-                    if (extraY != 0)
+                    else if (childDock.HasFlag(Pos.Bottom))
                     {
-                        y += extraY;
+                        y = remainingBounds.Bottom - (childMargin.Bottom + child.Height);
                     }
-                }
-
-                child.SetBounds(
-                    remainingBounds.X + childMargin.Left,
-                    y,
-                    child.Width,
-                    height
-                );
-
-                var boundsDeltaX = childOuterWidth + dockChildSpacing.Left;
-                remainingBounds.X += boundsDeltaX;
-                remainingBounds.Width -= boundsDeltaX;
-            }
-
-            if (childDock.HasFlag(Pos.Right))
-            {
-                var height = childFitsContentHeight
-                    ? child.Height
-                    : availableHeight;
-
-                var y = remainingBounds.Y + childMargin.Top;
-                if (childDock.HasFlag(Pos.CenterV))
-                {
-                    height = child.Height;
-                    var extraY = Math.Max(0, availableHeight - height) / 2;
-                    if (extraY != 0)
+                    else if (!childDock.HasFlag(Pos.Top))
                     {
-                        y += extraY;
+                        var extraY = Math.Max(0, availableHeight - height) / 2;
+                        if (extraY != 0)
+                        {
+                            y += extraY;
+                        }
                     }
+
+                    child.SetBounds(
+                        remainingBounds.X + childMargin.Left,
+                        y,
+                        child.Width,
+                        height
+                    );
+
+                    var boundsDeltaX = childOuterWidth + dockChildSpacing.Left;
+                    remainingBounds.X += boundsDeltaX;
+                    remainingBounds.Width -= boundsDeltaX;
                 }
-                else if (childDock.HasFlag(Pos.Bottom))
+
+                if (childDock.HasFlag(Pos.Right))
                 {
-                    y = remainingBounds.Bottom - (childMargin.Bottom + child.Height);
-                }
-                else if (!childDock.HasFlag(Pos.Top))
-                {
-                    var extraY = Math.Max(0, availableHeight - height) / 2;
-                    if (extraY != 0)
+                    var height = childFitsContentHeight
+                        ? child.Height
+                        : availableHeight;
+
+                    var y = remainingBounds.Y + childMargin.Top;
+                    if (childDock.HasFlag(Pos.CenterV))
                     {
-                        y += extraY;
+                        height = child.Height;
+                        var extraY = Math.Max(0, availableHeight - height) / 2;
+                        if (extraY != 0)
+                        {
+                            y += extraY;
+                        }
                     }
+                    else if (childDock.HasFlag(Pos.Bottom))
+                    {
+                        y = remainingBounds.Bottom - (childMargin.Bottom + child.Height);
+                    }
+                    else if (!childDock.HasFlag(Pos.Top))
+                    {
+                        var extraY = Math.Max(0, availableHeight - height) / 2;
+                        if (extraY != 0)
+                        {
+                            y += extraY;
+                        }
+                    }
+
+                    var offsetFromRight = child.Width + childMargin.Right;
+                    child.SetBounds(
+                        remainingBounds.X + remainingBounds.Width - offsetFromRight,
+                        y,
+                        child.Width,
+                        height
+                    );
+
+                    var boundsDeltaX = childOuterWidth + dockChildSpacing.Right;
+                    remainingBounds.Width -= boundsDeltaX;
                 }
 
-                var offsetFromRight = child.Width + childMargin.Right;
-                child.SetBounds(
-                    remainingBounds.X + remainingBounds.Width - offsetFromRight,
-                    y,
-                    child.Width,
-                    height
-                );
-
-                var boundsDeltaX = childOuterWidth + dockChildSpacing.Right;
-                remainingBounds.Width -= boundsDeltaX;
-            }
-
-            if (childDock.HasFlag(Pos.Top) && !childDock.HasFlag(Pos.Left) && !childDock.HasFlag(Pos.Right))
-            {
-                var width = childFitsContentWidth
-                    ? child.Width
-                    : availableWidth;
-
-                var x = remainingBounds.Left + childMargin.Left;
-
-                if (childDock.HasFlag(Pos.CenterH))
+                if (childDock.HasFlag(Pos.Top) && !childDock.HasFlag(Pos.Left) && !childDock.HasFlag(Pos.Right))
                 {
-                    x = remainingBounds.Left + (remainingBounds.Width - child.OuterWidth) / 2;
-                    width = child.Width;
+                    var width = childFitsContentWidth
+                        ? child.Width
+                        : availableWidth;
+
+                    var x = remainingBounds.Left + childMargin.Left;
+
+                    if (childDock.HasFlag(Pos.CenterH))
+                    {
+                        x = remainingBounds.Left + (remainingBounds.Width - child.OuterWidth) / 2;
+                        width = child.Width;
+                    }
+
+                    child.SetBounds(
+                        x,
+                        remainingBounds.Top + childMargin.Top,
+                        width,
+                        child.Height
+                    );
+
+                    var boundsDeltaY = childOuterHeight + dockChildSpacing.Top;
+                    remainingBounds.Y += boundsDeltaY;
+                    remainingBounds.Height -= boundsDeltaY;
                 }
 
-                child.SetBounds(
-                    x,
-                    remainingBounds.Top + childMargin.Top,
-                    width,
-                    child.Height
-                );
-
-                var boundsDeltaY = childOuterHeight + dockChildSpacing.Top;
-                remainingBounds.Y += boundsDeltaY;
-                remainingBounds.Height -= boundsDeltaY;
-            }
-
-            if (childDock.HasFlag(Pos.Bottom) && !childDock.HasFlag(Pos.Left) && !childDock.HasFlag(Pos.Right))
-            {
-                var width = childFitsContentWidth
-                    ? child.Width
-                    : availableWidth;
-
-                var offsetFromBottom = child.Height + childMargin.Bottom;
-                var x = remainingBounds.Left + childMargin.Left;
-
-                if (childDock.HasFlag(Pos.CenterH))
+                if (childDock.HasFlag(Pos.Bottom) && !childDock.HasFlag(Pos.Left) && !childDock.HasFlag(Pos.Right))
                 {
-                    x = remainingBounds.Left + (remainingBounds.Width - child.OuterWidth) / 2;
-                    width = child.Width;
+                    var width = childFitsContentWidth
+                        ? child.Width
+                        : availableWidth;
+
+                    var offsetFromBottom = child.Height + childMargin.Bottom;
+                    var x = remainingBounds.Left + childMargin.Left;
+
+                    if (childDock.HasFlag(Pos.CenterH))
+                    {
+                        x = remainingBounds.Left + (remainingBounds.Width - child.OuterWidth) / 2;
+                        width = child.Width;
+                    }
+
+                    child.SetBounds(
+                        x,
+                        remainingBounds.Bottom - offsetFromBottom,
+                        width,
+                        child.Height
+                    );
+
+                    remainingBounds.Height -= childOuterHeight + dockChildSpacing.Bottom;
                 }
 
-                child.SetBounds(
-                    x,
-                    remainingBounds.Bottom - offsetFromBottom,
-                    width,
-                    child.Height
-                );
-
-                remainingBounds.Height -= childOuterHeight + dockChildSpacing.Bottom;
+                child.RecurseLayout(skin);
             }
 
-            child.RecurseLayout(skin);
-        }
+            var boundsForFillNodes = remainingBounds;
+            _innerBounds = remainingBounds;
 
-        mInnerBounds = remainingBounds;
+            Point sizeToFitDockFillNodes = default;
 
-        Point sizeToFitDockFillNodes = default;
-
-        //
-        // Fill uses the left over space, so do that now.
-        //
-        foreach (var child in dockFillChildren)
-        {
-            var dock = child.Dock;
-
-            var childMargin = child.Margin;
-            var childMarginH = childMargin.Left + childMargin.Right;
-            var childMarginV = childMargin.Top + childMargin.Bottom;
-
-            Point newPosition = new(
-                remainingBounds.X + childMargin.Left,
-                remainingBounds.Y + childMargin.Top
+            var largestDockFillSize = dockFillChildren.Aggregate(
+                default(Point),
+                (size, node) =>
+                    new Point(Math.Max(size.X, node.Width), Math.Max(size.Y, node.Height))
             );
 
-            Point newSize = new(
-                remainingBounds.Width - childMarginH,
-                remainingBounds.Height - childMarginV
-            );
-
-            var childMinimumSize = child.MinimumSize;
-            var neededX = Math.Max(0, childMinimumSize.X - newSize.X);
-            var neededY = Math.Max(0, childMinimumSize.Y - newSize.Y);
-
-            bool exhaustSize = false;
-            if (neededX > 0 || neededY > 0)
+            int suggestedWidth, suggestedHeight;
+            if (dockFillChildren.Length < 2)
             {
-                exhaustSize = true;
-                _requiredSizeForDockFillNodes = new Point(Width + neededX, Height + neededY);
+                suggestedWidth = remainingBounds.Width;
+                suggestedHeight = remainingBounds.Height;
             }
-
-            newSize.X = Math.Max(childMinimumSize.X, newSize.X);
-            newSize.Y = Math.Max(childMinimumSize.Y, newSize.Y);
-
-            if (child is IAutoSizeToContents { AutoSizeToContents: true })
+            else if (largestDockFillSize.Y > largestDockFillSize.X)
             {
-                if (Pos.Right == (dock & (Pos.Right | Pos.Left)))
+                if (largestDockFillSize.Y > remainingBounds.Height)
                 {
-                    var offsetFromRight = child.Width + childMargin.Right + dockChildSpacing.Right;
-                    newPosition.X = remainingBounds.Right - offsetFromRight;
+                    suggestedWidth = Math.Max(largestDockFillSize.X, remainingBounds.Width);
+                    suggestedHeight = remainingBounds.Height / dockFillChildren.Length;
                 }
-
-                if (Pos.Bottom == (dock & (Pos.Bottom | Pos.Top)))
+                else
                 {
-                    var offsetFromBottom = child.Height + childMargin.Bottom + dockChildSpacing.Bottom;
-                    newPosition.Y = remainingBounds.Bottom - offsetFromBottom;
+                    suggestedWidth = remainingBounds.Width / dockFillChildren.Length;
+                    suggestedHeight = Math.Max(largestDockFillSize.Y, remainingBounds.Height);
                 }
-
-                if (dock.HasFlag(Pos.CenterH))
-                {
-                    newPosition.X = remainingBounds.X + (remainingBounds.Width - (childMarginH + child.Width)) / 2;
-                }
-
-                if (dock.HasFlag(Pos.CenterV))
-                {
-                    newPosition.Y = remainingBounds.Y + (remainingBounds.Height - (childMarginV + child.Height)) / 2;
-                }
-
-                child.SetPosition(newPosition);
+            }
+            else if (largestDockFillSize.X > remainingBounds.Width)
+            {
+                suggestedWidth = remainingBounds.Width / dockFillChildren.Length;
+                suggestedHeight = Math.Max(largestDockFillSize.Y, remainingBounds.Height);
             }
             else
             {
-                ApplyDockFill(child, newPosition, newSize);
+                suggestedWidth = Math.Max(largestDockFillSize.X, remainingBounds.Width);
+                suggestedHeight = remainingBounds.Height / dockFillChildren.Length;
             }
 
-            if (exhaustSize)
+            var fillHorizontal = suggestedHeight == remainingBounds.Height;
+
+            //
+            // Fill uses the left over space, so do that now.
+            //
+            foreach (var child in dockFillChildren)
             {
-                remainingBounds.X += remainingBounds.Width;
-                remainingBounds.Width = 0;
-                remainingBounds.Y += remainingBounds.Height;
-                remainingBounds.Height = 0;
+                var dock = child.Dock;
+
+                var childMargin = child.Margin;
+                var childMarginH = childMargin.Left + childMargin.Right;
+                var childMarginV = childMargin.Top + childMargin.Bottom;
+
+                Point newPosition = new(
+                    remainingBounds.X + childMargin.Left,
+                    remainingBounds.Y + childMargin.Top
+                );
+
+                Point newSize = new(
+                    suggestedWidth - childMarginH,
+                    suggestedHeight - childMarginV
+                );
+
+                var childMinimumSize = child.MinimumSize;
+                var neededX = Math.Max(0, childMinimumSize.X - newSize.X);
+                var neededY = Math.Max(0, childMinimumSize.Y - newSize.Y);
+
+                bool exhaustSize = false;
+                if (neededX > 0 || neededY > 0)
+                {
+                    exhaustSize = true;
+
+                    if (sizeToFitDockFillNodes == default)
+                    {
+                        sizeToFitDockFillNodes = Size;
+                    }
+
+                    sizeToFitDockFillNodes.X += neededX;
+                    sizeToFitDockFillNodes.Y += neededY;
+                }
+                else if (remainingBounds.Width < 1 || remainingBounds.Height < 1)
+                {
+                    if (sizeToFitDockFillNodes == default)
+                    {
+                        sizeToFitDockFillNodes = Size;
+                    }
+
+                    sizeToFitDockFillNodes.X += Math.Max(10, boundsForFillNodes.Width / dockFillChildren.Length);
+                    sizeToFitDockFillNodes.Y += Math.Max(10, boundsForFillNodes.Height / dockFillChildren.Length);
+                }
+
+                newSize.X = Math.Max(childMinimumSize.X, newSize.X);
+                newSize.Y = Math.Max(childMinimumSize.Y, newSize.Y);
+
+                if (child is IAutoSizeToContents { AutoSizeToContents: true })
+                {
+                    if (Pos.Right == (dock & (Pos.Right | Pos.Left)))
+                    {
+                        var offsetFromRight = child.Width + childMargin.Right + dockChildSpacing.Right;
+                        newPosition.X = remainingBounds.Right - offsetFromRight;
+                    }
+
+                    if (Pos.Bottom == (dock & (Pos.Bottom | Pos.Top)))
+                    {
+                        var offsetFromBottom = child.Height + childMargin.Bottom + dockChildSpacing.Bottom;
+                        newPosition.Y = remainingBounds.Bottom - offsetFromBottom;
+                    }
+
+                    if (dock.HasFlag(Pos.CenterH))
+                    {
+                        newPosition.X = remainingBounds.X + (remainingBounds.Width - (childMarginH + child.Width)) / 2;
+                    }
+
+                    if (dock.HasFlag(Pos.CenterV))
+                    {
+                        newPosition.Y = remainingBounds.Y +
+                                        (remainingBounds.Height - (childMarginV + child.Height)) / 2;
+                    }
+
+                    child.SetPosition(newPosition);
+
+                    // TODO: Figure out how to adjust remaining bounds in the autosize case
+                }
+                else
+                {
+                    ApplyDockFill(child, newPosition, newSize);
+
+                    var childOuterBounds = child.OuterBounds;
+                    if (fillHorizontal)
+                    {
+                        var delta = childOuterBounds.Right - remainingBounds.X;
+                        remainingBounds.X = childOuterBounds.Right;
+                        remainingBounds.Width -= delta;
+                    }
+                    else
+                    {
+                        var delta = childOuterBounds.Bottom - remainingBounds.Y;
+                        remainingBounds.Y = childOuterBounds.Bottom;
+                        remainingBounds.Height -= delta;
+                    }
+                }
+
+                if (exhaustSize)
+                {
+                    remainingBounds.X += remainingBounds.Width;
+                    remainingBounds.Width = 0;
+                    remainingBounds.Y += remainingBounds.Height;
+                    remainingBounds.Height = 0;
+                }
+
+                child.RecurseLayout(skin);
             }
+        }
+        else
+        {
+            foreach (var child in _children)
+            {
+                if (child.ShouldSkipLayout)
+                {
+                    continue;
+                }
 
-            child.RecurseLayout(skin);
+                child.RecurseLayout(skin);
+            }
         }
 
-        PostLayout(skin);
+        DoPostlayout(skin);
+
+        _postLayoutActionsParent.IsExecuting = true;
+        PostLayout.InvokePending();
+        _postLayoutActionsParent.IsExecuting = false;
+
         AfterLayout?.Invoke(this, EventArgs.Empty);
-
-        while (_deferredActions.TryDequeue(out var deferredAction))
-        {
-            deferredAction();
-        }
-
-        if (sizeToFitDockFillNodes != default)
-        {
-
-        }
 
         // ReSharper disable once InvertIf
         if (_canvas is { } canvas)
@@ -3617,12 +4090,12 @@ public partial class Base : IDisposable
     /// <returns>True if the control is out child.</returns>
     public bool IsChild(Base child)
     {
-        return mChildren.Contains(child);
+        return _children.Contains(child);
     }
 
     public Point ToCanvas(int x, int y)
     {
-        if (mParent is not { } parent)
+        if (_host is not { } parent)
         {
             return new Point(x, y);
         }
@@ -3637,7 +4110,7 @@ public partial class Base : IDisposable
             y += innerPanel.Y;
         }
 
-        return mParent.ToCanvas(x, y);
+        return _host.ToCanvas(x, y);
     }
 
     /// <summary>
@@ -3660,7 +4133,7 @@ public partial class Base : IDisposable
 
     public virtual Point ToGlobal(int x, int y)
     {
-        if (mParent is not { } parent)
+        if (_host is not { } parent)
         {
             return new Point(x, y);
         }
@@ -3680,7 +4153,7 @@ public partial class Base : IDisposable
 
     public virtual Point ToLocal(int x, int y)
     {
-        if (mParent is not {} parent)
+        if (_host is not {} parent)
         {
             return new Point(x, y);
         }
@@ -3704,7 +4177,7 @@ public partial class Base : IDisposable
         ////debug.print("Base.CloseMenus: {0}", this);
 
         // todo: not very efficient with the copying and recursive closing, maybe store currently open menus somewhere (canvas)?
-        var childrenCopy = mChildren.FindAll(x => true);
+        var childrenCopy = _children.FindAll(x => true);
         foreach (var child in childrenCopy)
         {
             child.CloseMenus();
@@ -3716,11 +4189,11 @@ public partial class Base : IDisposable
     /// </summary>
     protected virtual void UpdateRenderBounds()
     {
-        mRenderBounds.X = 0;
-        mRenderBounds.Y = 0;
+        _renderBounds.X = 0;
+        _renderBounds.Y = 0;
 
-        mRenderBounds.Width = mBounds.Width;
-        mRenderBounds.Height = mBounds.Height;
+        _renderBounds.Width = _bounds.Width;
+        _renderBounds.Height = _bounds.Height;
     }
 
     /// <summary>
@@ -3728,35 +4201,35 @@ public partial class Base : IDisposable
     /// </summary>
     public virtual void UpdateCursor()
     {
-        Platform.Neutral.SetCursor(mCursor);
+        Platform.Neutral.SetCursor(_cursor);
     }
 
     // giver
     public virtual Package DragAndDrop_GetPackage(int x, int y)
     {
-        return mDragAndDrop_package;
+        return _dragPayload;
     }
 
     // giver
     public virtual bool DragAndDrop_Draggable()
     {
-        if (mDragAndDrop_package == null)
+        if (_dragPayload == null)
         {
             return false;
         }
 
-        return mDragAndDrop_package.IsDraggable;
+        return _dragPayload.IsDraggable;
     }
 
     // giver
     public virtual void DragAndDrop_SetPackage(bool draggable, string name = "", object userData = null)
     {
-        if (mDragAndDrop_package == null)
+        if (_dragPayload == null)
         {
-            mDragAndDrop_package = new Package();
-            mDragAndDrop_package.IsDraggable = draggable;
-            mDragAndDrop_package.Name = name;
-            mDragAndDrop_package.UserData = userData;
+            _dragPayload = new Package();
+            _dragPayload.IsDraggable = draggable;
+            _dragPayload.Name = name;
+            _dragPayload.UserData = userData;
         }
     }
 
@@ -3807,35 +4280,50 @@ public partial class Base : IDisposable
         return false;
     }
 
+    public record struct SizeToChildrenArgs(
+        bool X = true,
+        bool Y = true,
+        bool Recurse = false,
+        Point MinimumSize = default
+    );
+
+    private static void SizeChildrenToChildren(Base @this, SizeToChildrenArgs args)
+    {
+        foreach (var child in @this._children)
+        {
+            if (!child._visible)
+            {
+                continue;
+            }
+
+            child.SizeToChildren(args);
+        }
+    }
+
+    public bool SizeToChildren(bool resizeX = true, bool resizeY = true, bool recursive = false) =>
+        SizeToChildren(new SizeToChildrenArgs(resizeX, resizeY, recursive));
+
     /// <summary>
     ///     Resizes the control to fit its children.
     /// </summary>
-    /// <param name="resizeX">Determines whether to change control's width.</param>
-    /// <param name="resizeY">Determines whether to change control's height.</param>
-    /// <param name="recursive"></param>
+    /// <param name="args"></param>
     /// <returns>True if bounds changed.</returns>
-    public virtual bool SizeToChildren(bool resizeX = true, bool resizeY = true, bool recursive = false)
+    public virtual bool SizeToChildren(SizeToChildrenArgs args)
     {
-        if (!resizeX && !resizeY)
+        if (args is { X: false, Y: false })
         {
             return false;
         }
 
-        if (recursive)
+        if (args.Recurse)
         {
-            var children = mChildren.ToArray();
-            foreach (var child in children)
-            {
-                if (child.mHidden)
-                {
-                    continue;
-                }
-
-                child.SizeToChildren(resizeX: resizeX, resizeY: resizeY, recursive: recursive);
-            }
+            RunOnMainThread(SizeChildrenToChildren, this, args);
         }
 
         var childrenSize = GetChildrenSize();
+        childrenSize.X = Math.Max(childrenSize.X, args.MinimumSize.X);
+        childrenSize.Y = Math.Max(childrenSize.Y, args.MinimumSize.Y);
+
         var padding = Padding;
         var size = childrenSize;
         var paddingH = padding.Right + padding.Left;
@@ -3854,7 +4342,7 @@ public partial class Base : IDisposable
         size.X = Math.Max(Math.Min(size.X, _maximumSize.X < 1 ? size.X : _maximumSize.X), _minimumSize.X);
         size.Y = Math.Max(Math.Min(size.Y, _maximumSize.Y < 1 ? size.Y : _maximumSize.Y), _minimumSize.Y);
 
-        var newSize = new Point(resizeX ? size.X : Width, resizeY ? size.Y : Height);
+        var newSize = new Point(args.X ? size.X : Width, args.Y ? size.Y : Height);
 
         if (Dock.HasFlag(Pos.Fill))
         {
@@ -3888,15 +4376,16 @@ public partial class Base : IDisposable
     ///     Implement this in derived compound controls to properly return their size.
     /// </remarks>
     /// <returns></returns>
-    public virtual Point GetChildrenSize()
+    public virtual Point GetChildrenSize() => RunOnMainThread(GetChildrenSize);
+
+    private static Point GetChildrenSize(Base @this)
     {
         Point min = new(int.MaxValue, int.MaxValue);
         Point max = default;
 
-        var children = mChildren.ToArray();
-        foreach (var child in children)
+        foreach (var child in @this._children)
         {
-            if (!child.IsVisible)
+            if (!child._visible)
             {
                 continue;
             }
@@ -3937,15 +4426,15 @@ public partial class Base : IDisposable
     {
         if (InputHandler.KeyboardFocus == this || !AccelOnlyFocus)
         {
-            if (mAccelerators.ContainsKey(accelerator))
+            if (_accelerators.ContainsKey(accelerator))
             {
-                mAccelerators[accelerator].Invoke(this, EventArgs.Empty);
+                _accelerators[accelerator].Invoke(this, EventArgs.Empty);
 
                 return true;
             }
         }
 
-        return mChildren.Any(child => child.HandleAccelerator(accelerator));
+        return _children.Any(child => child.HandleAccelerator(accelerator));
     }
 
     /// <summary>
@@ -3961,7 +4450,7 @@ public partial class Base : IDisposable
             return;
         }
 
-        mAccelerators[accelerator] = handler;
+        _accelerators[accelerator] = handler;
     }
 
     /// <summary>
@@ -3970,14 +4459,14 @@ public partial class Base : IDisposable
     /// <param name="accelerator">Accelerator text.</param>
     public void AddAccelerator(string accelerator)
     {
-        mAccelerators[accelerator] = DefaultAcceleratorHandler;
+        _accelerators[accelerator] = DefaultAcceleratorHandler;
     }
 
     /// <summary>
     ///     Function invoked after layout.
     /// </summary>
     /// <param name="skin">Skin to use.</param>
-    protected virtual void PostLayout(Skin.Base skin)
+    protected virtual void DoPostlayout(Skin.Base skin)
     {
     }
 
@@ -3986,9 +4475,8 @@ public partial class Base : IDisposable
     /// </summary>
     public virtual void Redraw()
     {
-        UpdateColors();
-        mCacheTextureDirty = true;
-        mParent?.Redraw();
+        _cacheTextureDirty = true;
+        _host?.Redraw();
     }
 
     /// <summary>
@@ -4004,7 +4492,7 @@ public partial class Base : IDisposable
     /// <summary>
     ///     Invalidates control's parent.
     /// </summary>
-    public void InvalidateParent() => mParent?.Invalidate(alsoInvalidateParent: true);
+    public void InvalidateParent() => _host?.Invalidate(alsoInvalidateParent: true);
 
     /// <summary>
     ///     Handler for keyboard events.
@@ -4144,9 +4632,7 @@ public partial class Base : IDisposable
         Base? next;
         lock (canvas._tabQueue)
         {
-            var hasValid = canvas._tabQueue.Any(
-                control => control is { IsDisabledByTree: false, IsHiddenByTree: false }
-            );
+            var hasValid = canvas._tabQueue.Any(IsNodeValidTabTarget);
             if (!hasValid)
             {
                 return true;
@@ -4188,10 +4674,10 @@ public partial class Base : IDisposable
                     canvas._tabQueue.AddLast(next);
                 }
             }
-            while (next.IsHiddenByTree || next.IsDisabledByTree || !next.IsTabable);
+            while (!IsNodeValidTabTarget(next));
         }
 
-        if (next is { IsTabable: true, IsDisabledByTree: false, IsHiddenByTree: false })
+        if (IsNodeValidTabTarget(next))
         {
             Console.WriteLine($"Focusing {next.ParentQualifiedName} ({next.GetFullishName()})");
             next.Focus(moveMouse: next is not TextBox);
@@ -4201,6 +4687,9 @@ public partial class Base : IDisposable
 
         return true;
     }
+
+    private static bool IsNodeValidTabTarget(Base? node) =>
+        node is { IsDisabledByTree: false, IsHiddenByTree: false, IsTabable: true };
 
     /// <summary>
     ///     Handler for Space keyboard event.
@@ -4523,7 +5012,7 @@ public partial class Base : IDisposable
         return true;
     }
 
-    protected bool SetAndDoIfChanged<T>(ref T field, T value, Action action)
+    protected bool SetAndDoIfChanged<TValue>(ref TValue field, TValue value, Action<Base> action)
     {
         ArgumentNullException.ThrowIfNull(action, nameof(action));
 
@@ -4532,7 +5021,75 @@ public partial class Base : IDisposable
             return false;
         }
 
-        action();
+        action(this);
+        return true;
+    }
+
+    protected static bool SetAndDoIfChanged<TNode, TValue>(
+        ref TValue field,
+        TValue value,
+        Action<TNode> action,
+        TNode @this
+    ) where TNode : Base
+    {
+        ArgumentNullException.ThrowIfNull(action, nameof(action));
+
+        if (!@this.SetIfChanged(ref field, value))
+        {
+            return false;
+        }
+
+        action(@this);
+        return true;
+    }
+
+    protected static bool SetAndDoIfChanged<TNode, TValue>(
+        ref TValue field,
+        TValue value,
+        Action<Base?, TNode> action,
+        Base? parent,
+        TNode @this
+    ) where TNode : Base
+    {
+        ArgumentNullException.ThrowIfNull(action, nameof(action));
+
+        if (!@this.SetIfChanged(ref field, value))
+        {
+            return false;
+        }
+
+        action(parent, @this);
+        return true;
+    }
+
+    protected static bool SetAndDoIfChanged<TNode, TValue>(
+        ref TValue field,
+        TValue value,
+        Action<TNode, TValue> action,
+        TNode @this
+    ) where TNode : Base
+    {
+        ArgumentNullException.ThrowIfNull(action, nameof(action));
+
+        if (!@this.SetIfChanged(ref field, value))
+        {
+            return false;
+        }
+
+        action(@this, value);
+        return true;
+    }
+
+    protected bool SetAndDoIfChanged<TValue>(ref TValue field, TValue value, Action<Base, TValue> action)
+    {
+        ArgumentNullException.ThrowIfNull(action, nameof(action));
+
+        if (!SetIfChanged(ref field, value))
+        {
+            return false;
+        }
+
+        action(this, value);
         return true;
     }
 

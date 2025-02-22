@@ -7,6 +7,7 @@ using Intersect.Client.General;
 using Intersect.Client.Items;
 using Intersect.Client.Localization;
 using Intersect.Client.Maps;
+using Intersect.Framework.Core;
 using Intersect.Utilities;
 
 namespace Intersect.Client.Interface.Game.Inventory;
@@ -156,9 +157,9 @@ public partial class MapItemWindow
         }
 
         // Do we display our window?
-        if (mFoundItems != mMapItemWindow.IsVisible)
+        if (mFoundItems != mMapItemWindow.IsVisibleInTree)
         {
-            mMapItemWindow.IsVisible = mFoundItems;
+            mMapItemWindow.IsVisibleInTree = mFoundItems;
         }
     }
 

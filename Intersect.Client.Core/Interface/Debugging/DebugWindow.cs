@@ -1,14 +1,11 @@
 using System.Diagnostics;
-using Intersect.Async;
 using Intersect.Client.Core;
-using Intersect.Client.Entities;
 using Intersect.Client.Framework.Content;
-using Intersect.Client.Framework.File_Management;
 using Intersect.Client.Framework.GenericClasses;
 using Intersect.Client.Framework.Graphics;
 using Intersect.Client.Framework.Gwen;
 using Intersect.Client.Framework.Gwen.Control;
-using Intersect.Client.Framework.Gwen.Control.Data;
+using Intersect.Client.Framework.Gwen.Control.EventArguments;
 using Intersect.Client.Framework.Gwen.Control.Layout;
 using Intersect.Client.Framework.Gwen.Control.Utility;
 using Intersect.Client.Framework.Input;
@@ -18,6 +15,8 @@ using Intersect.Client.Interface.Debugging.Providers;
 using Intersect.Client.Localization;
 using Intersect.Client.Maps;
 using Intersect.Framework.Reflection;
+using Intersect.Framework.SystemInformation;
+using Intersect.IO.Files;
 using static Intersect.Client.Framework.File_Management.GameContentManager;
 
 namespace Intersect.Client.Interface.Debugging;
@@ -49,7 +48,7 @@ internal sealed partial class DebugWindow : Window
         CheckboxDrawDebugOutlines = CreateInfoCheckboxDrawDebugOutlines(TabInfo.Page);
         CheckboxEnableLayoutHotReloading = CreateInfoCheckboxEnableLayoutHotReloading(TabInfo.Page);
         CheckboxIncludeTextNodesInHover = CreateInfoCheckboxIncludeTextNodesInHover(TabInfo.Page);
-        CheckboxViewClickedComponentInDebugger = CreateInfoCheckboxViewClickedNodeInDebugger(TabInfo.Page);
+        CheckboxViewClickedNodeInDebugger = CreateInfoCheckboxViewClickedNodeInDebugger(TabInfo.Page);
         ButtonShutdownServer = CreateInfoButtonShutdownServer(TabInfo.Page);
         ButtonShutdownServerAndExit = CreateInfoButtonShutdownServerAndExit(TabInfo.Page);
         TableDebugStats = CreateInfoTableDebugStats(TabInfo.Page);
@@ -59,12 +58,326 @@ internal sealed partial class DebugWindow : Window
         AssetsList = CreateAssetsList(TabAssets.Page);
         AssetsButtonReloadAsset = CreateAssetsButtonReloadAsset(AssetsToolsTable, AssetsList);
 
+        TabSystem = Tabs.AddPage(Strings.Debug.TabLabelSystem, nameof(TabSystem));
+        _ = new Label(TabSystem.Page, name: "HeaderSectionSystemStatistics")
+        {
+            Dock = Pos.Top,
+            Font = _defaultFont,
+            Text = Strings.Debug.SectionSystemStatistics,
+            TextAlign = Pos.CenterH,
+            TextColorOverride = new Color(r: 191, g: 255, b: 191),
+        };
+        SystemStatisticsTable = CreateSystemStatisticsTable(TabSystem.Page);
+        _ = new Label(TabSystem.Page, name: "HeaderSectionGPUStatistics")
+        {
+            Dock = Pos.Top,
+            Font = _defaultFont,
+            Text = Strings.Debug.SectionGPUStatistics,
+            TextAlign = Pos.CenterH,
+            TextColorOverride = new Color(r: 191, g: 255, b: 191),
+        };
+        GPUStatisticsTable = CreateGPUStatisticsTable(TabSystem.Page);
+        _ = new Label(TabSystem.Page, name: "HeaderSectionGPUAllocations")
+        {
+            Dock = Pos.Top,
+            Font = _defaultFont,
+            Text = Strings.Debug.SectionGPUAllocations,
+            TextAlign = Pos.CenterH,
+            TextColorOverride = new Color(r: 191, g: 255, b: 191),
+        };
+        GPUAllocationsTable = CreateGPUAllocationsTable(TabSystem.Page);
+
         AssetsToolsTable.SizeToChildren();
+    }
+
+    protected override void Dispose(bool disposing)
+    {
+        UnsubscribeGPU();
+        RemoveIntercepts();
+
+        base.Dispose(disposing);
+    }
+
+    private Table GPUStatisticsTable { get; }
+
+    private Table SystemStatisticsTable { get; }
+
+    private Table GPUAllocationsTable { get; }
+
+    private Table CreateGPUAllocationsTable(Base parent)
+    {
+        Panel gpuAllocationsPanel = new(parent: parent, name: nameof(gpuAllocationsPanel))
+        {
+            Dock = Pos.Fill,
+        };
+
+        ScrollControl gpuAllocationsScroller = new(parent: gpuAllocationsPanel, name: nameof(gpuAllocationsScroller))
+        {
+            Dock = Pos.Fill,
+            InnerPanelPadding = new Padding(horizontal: 8, vertical: 0),
+            ShouldCacheToTexture = true,
+        };
+
+        gpuAllocationsScroller.VerticalScrollBar.BaseNudgeAmount *= 2;
+
+        var table = new Table(parent: gpuAllocationsScroller, name: nameof(GPUAllocationsTable))
+        {
+            AutoSizeToContentHeightOnChildResize = true,
+            AutoSizeToContentWidthOnChildResize = true,
+            CellSpacing = new Point(x: 8, y: 2),
+            ColumnCount = 2,
+            ColumnWidths = [null, 100],
+            Dock = Pos.Fill,
+            Font = _defaultFont,
+            MinimumSize = new Point(x: 408, y: 0),
+            SizeToContents = true,
+        };
+        table.VisibilityChanged += (sender, args) =>
+        {
+            if (!args.IsVisibleInTree || !_resizeGPUAllocationsTable)
+            {
+                return;
+            }
+
+            _resizeGPUAllocationsTable = false;
+            sender.SizeToChildren(recursive: true);
+            sender.InvalidateParent();
+        };
+        table.SizeChanged += ResizeTableToChildrenOnSizeChanged;
+
+        var existingTextures = Graphics.Renderer.Textures;
+        foreach (var texture in existingTextures)
+        {
+            _ = EnsureGPUAllocationsRowFor(gameTexture: texture, creating: true, table: table);
+        }
+
+        SubscribeGPU();
+
+        return table;
+    }
+
+    private static void ResizeTableHeightToChildrenOnSizeChanged(Base sender, ValueChangedEventArgs<Point> args)
+    {
+        sender.SizeToChildren(resizeX: false, resizeY: true, recursive: true);
+    }
+
+    private static void ResizeTableToChildrenOnSizeChanged(Base sender, ValueChangedEventArgs<Point> args)
+    {
+        sender.SizeToChildren(resizeX: args.Value.X > args.OldValue.X, resizeY: true, recursive: true);
+    }
+
+    private void SubscribeGPU()
+    {
+        Graphics.Renderer.TextureAllocated += RendererOnTextureAllocated;
+        Graphics.Renderer.TextureCreated += RendererOnTextureCreated;
+        Graphics.Renderer.TextureDisposed += RendererOnTextureDisposed;
+        Graphics.Renderer.TextureFreed += RendererOnTextureFreed;
+    }
+
+    private void UnsubscribeGPU()
+    {
+        Graphics.Renderer.TextureAllocated -= RendererOnTextureAllocated;
+        Graphics.Renderer.TextureCreated -= RendererOnTextureCreated;
+        Graphics.Renderer.TextureDisposed -= RendererOnTextureDisposed;
+        Graphics.Renderer.TextureFreed -= RendererOnTextureFreed;
+    }
+
+    private void RendererOnTextureDisposed(object? _, TextureEventArgs args)
+    {
+        var gameTexture = args.GameTexture;
+        if (_gpuAllocationsRowByTextureLookup.TryGetValue(gameTexture, out var existingRow))
+        {
+            GPUAllocationsTable.RemoveRow(existingRow);
+        }
+    }
+
+    private void RendererOnTextureFreed(object? _, TextureEventArgs args)
+    {
+        var x = this;
+        var gameTexture = args.GameTexture;
+        var row = EnsureGPUAllocationsRowFor(gameTexture, creating: false);
+        if (row.GetCellContents(1) is not Label statusLabel)
+        {
+            return;
+        }
+
+        statusLabel.Text = "Freed";
+        statusLabel.TextColorOverride = new Color(255, 63, 63);
+    }
+
+    private void RendererOnTextureAllocated(object? _, TextureEventArgs args)
+    {
+        var gameTexture = args.GameTexture;
+        var row = EnsureGPUAllocationsRowFor(gameTexture, creating: false);
+        if (row.GetCellContents(1) is not Label statusLabel)
+        {
+            return;
+        }
+
+        statusLabel.Text = "Allocated";
+        statusLabel.TextColorOverride = new Color(63, 255, 63);
+    }
+
+    private void RendererOnTextureCreated(object? _, TextureEventArgs args)
+    {
+        var gameTexture = args.GameTexture;
+        EnsureGPUAllocationsRowFor(gameTexture, creating: true);
+    }
+
+    private readonly Dictionary<IGameTexture, TableRow> _gpuAllocationsRowByTextureLookup = [];
+
+    private TableRow EnsureGPUAllocationsRowFor(IGameTexture gameTexture, bool creating, Table? table = null)
+    {
+        if (_gpuAllocationsRowByTextureLookup.TryGetValue(gameTexture, out var existingRow))
+        {
+            if (creating)
+            {
+                throw new InvalidOperationException();
+            }
+
+            return existingRow;
+        }
+
+        table ??= GPUAllocationsTable;
+
+        existingRow = table.InsertRowSorted(
+            gameTexture.Name,
+            userData: gameTexture,
+            keySelector: SelectRowUserDataGameTextureName
+        );
+
+        var nameCell = existingRow.GetCellContents(0);
+        nameCell.UserData = gameTexture;
+        nameCell.MouseInputEnabled = true;
+        nameCell.Clicked += CopyAssetNameToClipboardOnNameCellClicked;
+        existingRow.SetCellText(1, "Created");
+        if (existingRow.GetCellContents(1) is Label statusLabel)
+        {
+            statusLabel.TextColorOverride = new Color(191, 191, 191);
+        }
+        _gpuAllocationsRowByTextureLookup[gameTexture] = existingRow;
+
+        if (table.IsVisibleInTree)
+        {
+            table.SizeToChildren(recursive: true);
+        }
+        else
+        {
+            _resizeGPUAllocationsTable = true;
+        }
+
+        return existingRow;
+    }
+
+    private bool _resizeGPUAllocationsTable;
+
+    private static void CopyAssetNameToClipboardOnNameCellClicked(Base sender, MouseButtonState _)
+    {
+        if (sender.UserData is IAsset asset)
+        {
+            GameClipboard.Instance.SetText(asset.Name);
+        }
+    }
+
+    private static string? SelectRowUserDataGameTextureName(Base? node)
+    {
+        return node?.UserData is IGameTexture gameTexture ? gameTexture.Name : null;
+    }
+
+    private Table CreateGPUStatisticsTable(Base parent)
+    {
+        ScrollControl scroller = new(parent, nameof(scroller))
+        {
+            Dock = Pos.Top,
+            MinimumSize = new Point(0, 100),
+        };
+
+        scroller.VerticalScrollBar.BaseNudgeAmount *= 2;
+
+        var table = new Table(scroller, nameof(SystemStatisticsTable))
+        {
+            AutoSizeToContentHeightOnChildResize = true,
+            AutoSizeToContentWidthOnChildResize = true,
+            CellSpacing = new Point(8, 2),
+            ColumnCount = 2,
+            ColumnWidths = [180, null],
+            Dock = Pos.Fill,
+            Font = _defaultFont,
+        };
+        table.SizeChanged += (sender, args) =>
+        {
+            ResizeTableHeightToChildrenOnSizeChanged(sender, args);
+            var minimumSize = new Point(
+                0,
+                table.OuterHeight + scroller.InnerPanelPadding.Top + scroller.InnerPanelPadding.Bottom
+            );
+            scroller.MinimumSize = minimumSize;
+        };
+
+        table.AddRow(Strings.Debug.Fps, name: "FPSRow").Listen(1, new DelegateDataProvider<int>(() => Graphics.Renderer.FPS), NoValue);
+        // table.AddRow(Strings.Debug.Draws, name: "DrawsRow").Listen(1, new DelegateDataProvider<int>(() => Graphics.DrawCalls), NoValue);
+
+        table.AddRow(Strings.Debug.MapsDrawn, name: "MapsDrawnRow").Listen(1, new DelegateDataProvider<int>(() => Graphics.MapsDrawn), NoValue);
+        table.AddRow(Strings.Debug.EntitiesDrawn, name: "EntitiesDrawnRow").Listen(1, new DelegateDataProvider<int>(() => Graphics.EntitiesDrawn), NoValue);
+        table.AddRow(Strings.Debug.LightsDrawn, name: "LightsDrawnRow").Listen(1, new DelegateDataProvider<int>(() => Graphics.LightsDrawn), NoValue);
+        table.AddRow(Strings.Debug.InterfaceObjects, name: "InterfaceObjectsRow").Listen(1, new DelegateDataProvider<int?>(() => Interface.CurrentInterface?.NodeCount, delayMilliseconds: 1000), NoValue);
+
+        table.AddRow(Strings.Debug.RenderTargetAllocations, name: "GPURenderTargetAllocations").Listen(1, new DelegateDataProvider<ulong>(() => Graphics.Renderer.RenderTargetAllocations), NoValue);
+        table.AddRow(Strings.Debug.TextureAllocations, name: "GPUTextureAllocations").Listen(1, new DelegateDataProvider<ulong>(() => Graphics.Renderer.TextureAllocations), NoValue);
+        table.AddRow(Strings.Debug.TextureCount, name: "GPUTextureCount").Listen(1, new DelegateDataProvider<ulong>(() => Graphics.Renderer.TextureCount), NoValue);
+
+        table.AddRow(Strings.Debug.UsedVRAM, name: "GPUUsedVRAM").Listen(1, new DelegateDataProvider<string>(() => FileSystemHelper.FormatSize(Graphics.Renderer.UsedMemory)), NoValue);
+        table.AddRow(Strings.Debug.FreeVRAM, name: "GPUFreeVRAM").Listen(1, new DelegateDataProvider<string>(() => FileSystemHelper.FormatSize(PlatformStatistics.AvailableGPUMemory)), NoValue);
+        table.AddRow(Strings.Debug.TotalVRAM, name: "GPUTotalVRAM").Listen(1, new DelegateDataProvider<string>(() => FileSystemHelper.FormatSize(PlatformStatistics.TotalGPUMemory)), NoValue);
+
+        table.PreLayout.Enqueue(t => t.SizeToChildren(recursive: true), table);
+
+        return table;
+    }
+
+    private Table CreateSystemStatisticsTable(Base parent)
+    {
+        ScrollControl scroller = new(parent, nameof(scroller))
+        {
+            Dock = Pos.Top,
+        };
+
+        scroller.VerticalScrollBar.BaseNudgeAmount *= 2;
+
+        var table = new Table(scroller, nameof(SystemStatisticsTable))
+        {
+            AutoSizeToContentHeightOnChildResize = true,
+            AutoSizeToContentWidthOnChildResize = true,
+            CellSpacing = new Point(8, 2),
+            ColumnCount = 2,
+            ColumnWidths = [180, null],
+            Dock = Pos.Top,
+            Font = _defaultFont,
+        };
+        table.SizeChanged += (sender, args) =>
+        {
+            ResizeTableHeightToChildrenOnSizeChanged(sender, args);
+            var minimumSize = new Point(
+                0,
+                table.OuterHeight + scroller.InnerPanelPadding.Top + scroller.InnerPanelPadding.Bottom
+            );
+            scroller.MinimumSize = minimumSize;
+        };
+
+        table.AddRow(Strings.Debug.FreeVirtualRAM, name: "RAMFreeVirtual").Listen(1, new DelegateDataProvider<string>(() => FileSystemHelper.FormatSize(PlatformStatistics.AvailableSystemMemory)), NoValue);
+        table.AddRow(Strings.Debug.TotalVirtualRAM, name: "RAMTotalVirtual").Listen(1, new DelegateDataProvider<string>(() => FileSystemHelper.FormatSize(PlatformStatistics.TotalSystemMemory)), NoValue);
+
+        table.AddRow(Strings.Debug.FreePhysicalRAM, name: "RAMFreePhysical").Listen(1, new DelegateDataProvider<string>(() => FileSystemHelper.FormatSize(PlatformStatistics.AvailablePhysicalMemory)), NoValue);
+        table.AddRow(Strings.Debug.TotalPhysicalRAM, name: "RAMTotalPhysical").Listen(1, new DelegateDataProvider<string>(() => FileSystemHelper.FormatSize(PlatformStatistics.TotalPhysicalMemory)), NoValue);
+
+        table.PreLayout.Enqueue(t => t.SizeToChildren(recursive: true), table);
+
+        return table;
     }
 
     private SearchableTree CreateAssetsList(Base parent)
     {
-        var dataProvider = new TexturesSearchableTreeDataProvider(Current, this);
+        var dataProvider = new AssetsSearchableTreeDataProvider(Current, this);
         SearchableTree assetList = new(parent, dataProvider, name: nameof(AssetsList))
         {
             Dock = Pos.Fill,
@@ -104,37 +417,41 @@ internal sealed partial class DebugWindow : Window
         };
         row.SetCellContents(0, buttonReloadAsset);
 
-        assetList.SelectionChanged += (_, _) =>
-            buttonReloadAsset.IsDisabled = assetList.SelectedNodes.All(
-                node => node.UserData is not SearchableTreeDataEntry { UserData: GameTexture }
-            );
+        assetList.SelectionChanged += AssetListOnSelectionChanged;
 
-        buttonReloadAsset.Clicked += (_, _) =>
-        {
-            foreach (var node in assetList.SelectedNodes)
-            {
-                if (node.UserData is not SearchableTreeDataEntry entry)
-                {
-                    continue;
-                }
-
-                if (entry.UserData is not IAsset asset)
-                {
-                    continue;
-                }
-
-                // TODO: Audio reloading?
-                if (asset is not GameTexture texture)
-                {
-                    continue;
-                }
-
-                texture.Reload();
-            }
-        };
+        buttonReloadAsset.Clicked += ButtonReloadAssetOnClicked;
         row.SetCellContents(0, buttonReloadAsset, enableMouseInput: true);
 
         return buttonReloadAsset;
+    }
+
+    private void ButtonReloadAssetOnClicked(Base @base, MouseButtonState mouseButtonState)
+    {
+        foreach (var node in AssetsList.SelectedNodes)
+        {
+            if (node.UserData is not SearchableTreeDataEntry entry)
+            {
+                continue;
+            }
+
+            if (entry.UserData is not IAsset asset)
+            {
+                continue;
+            }
+
+            // TODO: Audio reloading?
+            if (asset is not IGameTexture texture)
+            {
+                continue;
+            }
+
+            texture.Reload();
+        }
+    }
+
+    private void AssetListOnSelectionChanged(Base @base, EventArgs eventArgs)
+    {
+        AssetsButtonReloadAsset.IsDisabled = AssetsList.SelectedNodes.All(node => node.UserData is not SearchableTreeDataEntry { UserData: IGameTexture });
     }
 
     private TabControl Tabs { get; }
@@ -142,6 +459,8 @@ internal sealed partial class DebugWindow : Window
     private TabButton TabInfo { get; }
 
     private TabButton TabAssets { get; }
+
+    private TabButton TabSystem { get; }
 
     private SearchableTree AssetsList { get; }
 
@@ -155,7 +474,7 @@ internal sealed partial class DebugWindow : Window
 
     private LabeledCheckBox CheckboxIncludeTextNodesInHover { get; }
 
-    private LabeledCheckBox CheckboxViewClickedComponentInDebugger { get; }
+    private LabeledCheckBox CheckboxViewClickedNodeInDebugger { get; }
 
     private Button ButtonShutdownServer { get; }
 
@@ -165,9 +484,6 @@ internal sealed partial class DebugWindow : Window
 
     protected override void EnsureInitialized()
     {
-        TableDebugStats.SizeToChildren();
-
-        LoadJsonUi(UI.Debug, Graphics.Renderer?.GetResolutionString());
     }
 
     protected override void OnAttached(Base parent)
@@ -209,16 +525,18 @@ internal sealed partial class DebugWindow : Window
             Text = Strings.Debug.DrawDebugOutlines,
         };
 
-        checkbox.CheckChanged += (_, _) =>
-        {
-            _drawDebugOutlinesEnabled = checkbox.IsChecked;
-            if (Root is { } root)
-            {
-                root.DrawDebugOutlines = _drawDebugOutlinesEnabled;
-            }
-        };
+        checkbox.CheckChanged += CheckboxDrawDebugOutlinesOnCheckChanged;
 
         return checkbox;
+    }
+
+    private void CheckboxDrawDebugOutlinesOnCheckChanged(ICheckbox sender, ValueChangedEventArgs<bool> eventArgs)
+    {
+        _drawDebugOutlinesEnabled = eventArgs.Value;
+        if (Root is { } root)
+        {
+            root.DrawDebugOutlines = _drawDebugOutlinesEnabled;
+        }
     }
 
     private LabeledCheckBox CreateInfoCheckboxEnableLayoutHotReloading(Base parent)
@@ -232,12 +550,17 @@ internal sealed partial class DebugWindow : Window
             TextColorOverride = Color.Yellow,
         };
 
-        checkbox.CheckChanged += (_, _) => Globals.ContentManager.ContentWatcher.Enabled = checkbox.IsChecked;
+        checkbox.CheckChanged += CheckboxEnableLayoutHotReloadOnCheckChanged;
 
         checkbox.SetToolTipText(Strings.Internals.ExperimentalFeatureTooltip);
         checkbox.TooltipFont = Skin.DefaultFont;
 
         return checkbox;
+    }
+
+    private static void CheckboxEnableLayoutHotReloadOnCheckChanged(ICheckbox sender, ValueChangedEventArgs<bool> args)
+    {
+        Current.ContentWatcher.Enabled = args.Value;
     }
 
     private LabeledCheckBox CreateInfoCheckboxIncludeTextNodesInHover(Base parent)
@@ -250,24 +573,26 @@ internal sealed partial class DebugWindow : Window
             Text = Strings.Debug.IncludeTextNodesInHover,
         };
 
-        checkbox.CheckChanged += (_, _) =>
-        {
-            if (_nodeUnderCursorProvider.Filter.HasFlag(NodeFilter.IncludeText))
-            {
-                _nodeUnderCursorProvider.Filter &= ~NodeFilter.IncludeText;
-            }
-            else
-            {
-                _nodeUnderCursorProvider.Filter |= NodeFilter.IncludeText;
-            }
-        };
+        checkbox.CheckChanged += CheckboxIncludesTextNodesInHoverOnCheckChanged;
 
         return checkbox;
     }
 
+    private void CheckboxIncludesTextNodesInHoverOnCheckChanged(ICheckbox checkbox, ValueChangedEventArgs<bool> eventArgs)
+    {
+        if (eventArgs.Value)
+        {
+            _nodeUnderCursorProvider.Filter |= NodeFilter.IncludeText;
+        }
+        else
+        {
+            _nodeUnderCursorProvider.Filter &= ~NodeFilter.IncludeText;
+        }
+    }
+
     private LabeledCheckBox CreateInfoCheckboxViewClickedNodeInDebugger(Base parent)
     {
-        var checkbox = new LabeledCheckBox(parent, nameof(CheckboxViewClickedComponentInDebugger))
+        var checkbox = new LabeledCheckBox(parent, nameof(CheckboxViewClickedNodeInDebugger))
         {
             Dock = Pos.Top,
             Font = _defaultFont,
@@ -276,20 +601,27 @@ internal sealed partial class DebugWindow : Window
             TooltipText = Strings.Debug.ViewClickedNodeInDebuggerTooltip,
         };
 
-        checkbox.CheckChanged += (_, _) =>
+        checkbox.CheckChanged += CheckboxViewClickedNodeInDebuggerOnCheckChanged;
+
+        return checkbox;
+    }
+
+    private void CheckboxViewClickedNodeInDebuggerOnCheckChanged(ICheckbox checkbox, ValueChangedEventArgs<bool> eventArgs)
+    {
+        var wasClicked = _viewClickedNodeInDebugger;
+
+        _viewClickedNodeInDebugger = eventArgs.Value;
+        if (_viewClickedNodeInDebugger)
         {
-            _viewClickedNodeInDebugger = !_viewClickedNodeInDebugger;
-            if (_viewClickedNodeInDebugger)
+            if (!wasClicked)
             {
                 AddIntercepts();
             }
-            else
-            {
-                RemoveIntercepts();
-            }
-        };
-
-        return checkbox;
+        }
+        else if (wasClicked)
+        {
+            RemoveIntercepts();
+        }
     }
 
     private void AddIntercepts()
@@ -306,7 +638,7 @@ internal sealed partial class DebugWindow : Window
 
     private bool MouseDownIntercept(Keys modifier, MouseButton mouseButton)
     {
-        if (IsVisible && _viewClickedNodeInDebugger)
+        if (IsVisibleInTree && _viewClickedNodeInDebugger)
         {
             return true;
         }
@@ -317,7 +649,7 @@ internal sealed partial class DebugWindow : Window
 
     private bool MouseUpIntercept(Keys modifier, MouseButton mouseButton)
     {
-        if (!IsVisible || !_viewClickedNodeInDebugger)
+        if (!IsVisibleInTree || !_viewClickedNodeInDebugger)
         {
             RemoveIntercepts();
             return false;
@@ -383,13 +715,10 @@ internal sealed partial class DebugWindow : Window
             Dock = Pos.Fill,
             Font = _defaultFont,
         };
-        table.SizeChanged += (_, args) =>
-        {
-            table.SizeToChildren(resizeX: args.Value.X > args.OldValue.X, resizeY: true, recursive: true);
-        };
+        table.SizeChanged += ResizeTableToChildrenOnSizeChanged;
 
-        table.AddRow(Strings.Debug.Fps, name: "FPSRow").Listen(1, new DelegateDataProvider<int?>(() => Graphics.Renderer?.Fps), NoValue);
-        // table.AddRow(Strings.Debug.Draws, name: "DrawsRow").Listen(1, new DelegateDataProvider<int>(() => Graphics.DrawCalls), NoValue);
+        table.AddRow(Strings.Debug.Fps, name: "FPSRow").Listen(1, new DelegateDataProvider<int>(() => Graphics.Renderer.FPS), NoValue);
+        table.AddRow(Strings.Debug.Draws, name: "DrawsRow").Listen(1, new DelegateDataProvider<int>(() => Graphics.DrawCalls), NoValue);
         table.AddRow(Strings.Debug.Ping, name: "PingRow").Listen(1, new DelegateDataProvider<int>(() => Networking.Network.Ping, delayMilliseconds: 5000), NoValue);
 
         table.AddRow(Strings.Debug.Map, name: "MapRow").Listen(1, new DelegateDataProvider<string?>(() => MapInstance.TryGet(Globals.Me?.MapId ?? default, out var mapInstance) ? mapInstance.Name : default), NoValue);
@@ -405,11 +734,34 @@ internal sealed partial class DebugWindow : Window
         table.AddRow(Strings.Debug.LightsDrawn, name: "LightsDrawnRow").Listen(1, new DelegateDataProvider<int>(() => Graphics.LightsDrawn), NoValue);
         table.AddRow(Strings.Debug.InterfaceObjects, name: "InterfaceObjectsRow").Listen(1, new DelegateDataProvider<int?>(() => Interface.CurrentInterface?.NodeCount, delayMilliseconds: 1000), NoValue);
 
-        var titleRow = table.AddRow(Strings.Debug.ControlUnderCursor, columnCount: 2, name: "ControlUnderCursorRow", columnIndex: 1);
+        var rowSectionGPU = table.AddRow(Strings.Debug.SectionGPUStatistics, columnCount: 2, name: "SectionGPU", columnIndex: 0);
+        if (rowSectionGPU.GetCellContents(0) is Label labelSectionGPU)
+        {
+            labelSectionGPU.TextColorOverride = new Color(r: 191, g: 255, b: 191);
+        }
+
+        table.AddRow(Strings.Debug.RenderTargetAllocations, name: "GPURenderTargetAllocations").Listen(1, new DelegateDataProvider<ulong>(() => Graphics.Renderer.RenderTargetAllocations), NoValue);
+        table.AddRow(Strings.Debug.TextureAllocations, name: "GPUTextureAllocations").Listen(1, new DelegateDataProvider<ulong>(() => Graphics.Renderer.TextureAllocations), NoValue);
+        table.AddRow(Strings.Debug.TextureCount, name: "GPUTextureCount").Listen(1, new DelegateDataProvider<ulong>(() => Graphics.Renderer.TextureCount), NoValue);
+
+        table.AddRow(Strings.Debug.FreeVRAM, name: "GPUFreeVRAM").Listen(1, new DelegateDataProvider<string>(() => FileSystemHelper.FormatSize(PlatformStatistics.AvailableGPUMemory)), NoValue);
+        table.AddRow(Strings.Debug.TotalVRAM, name: "GPUTotalVRAM").Listen(1, new DelegateDataProvider<string>(() => FileSystemHelper.FormatSize(PlatformStatistics.TotalGPUMemory)), NoValue);
+
+        table.AddRow(Strings.Debug.FreeVirtualRAM, name: "RAMFreeVirtual").Listen(1, new DelegateDataProvider<string>(() => FileSystemHelper.FormatSize(PlatformStatistics.AvailableSystemMemory)), NoValue);
+        table.AddRow(Strings.Debug.TotalVirtualRAM, name: "RAMTotalVirtual").Listen(1, new DelegateDataProvider<string>(() => FileSystemHelper.FormatSize(PlatformStatistics.TotalSystemMemory)), NoValue);
+
+        table.AddRow(Strings.Debug.FreePhysicalRAM, name: "RAMFreePhysical").Listen(1, new DelegateDataProvider<string>(() => FileSystemHelper.FormatSize(PlatformStatistics.AvailablePhysicalMemory)), NoValue);
+        table.AddRow(Strings.Debug.TotalPhysicalRAM, name: "RAMTotalPhysical").Listen(1, new DelegateDataProvider<string>(() => FileSystemHelper.FormatSize(PlatformStatistics.TotalPhysicalMemory)), NoValue);
+
+        var rowSectionUI = table.AddRow(Strings.Debug.ControlUnderCursor, columnCount: 2, name: "SectionUI", columnIndex: 0);
+        if (rowSectionUI.GetCellContents(0) is Label labelSectionUI)
+        {
+            labelSectionUI.TextColorOverride = new Color(r: 191, g: 255, b: 191);
+        }
 
         table.AddRow(Strings.Internals.Type, name: "TypeRow").Listen(1, _nodeUnderCursorProvider, (node, _) => node?.GetType().GetName(), Strings.Internals.NotApplicable);
         table.AddRow(Strings.Internals.Name, name: "NameRow").Listen(1, _nodeUnderCursorProvider, (node, _) => node?.ParentQualifiedName, NoValue);
-        table.AddRow(Strings.Internals.IsVisible, name: "IsVisible").Listen(1, _nodeUnderCursorProvider, (node, _) => node?.IsVisible,  NoValue);
+        table.AddRow(Strings.Internals.IsVisibleInTree, name: "IsVisible").Listen(1, _nodeUnderCursorProvider, (node, _) => node?.IsVisibleInTree,  NoValue);
         table.AddRow(Strings.Internals.IsVisibleInParent, name: "IsVisibleInParent").Listen(1, _nodeUnderCursorProvider, (node, _) => node?.IsVisibleInParent,  NoValue);
         table.AddRow(Strings.Internals.IsDisabled, name: "IsDisabled").Listen(1, _nodeUnderCursorProvider, (node, _) => node?.IsDisabled,  NoValue);
         table.AddRow(Strings.Internals.IsDisabledByTree, name: "IsDisabledByTree").Listen(1, _nodeUnderCursorProvider, (node, _) => node?.IsDisabledByTree,  NoValue);
@@ -435,7 +787,7 @@ internal sealed partial class DebugWindow : Window
         var rows = table.Children.OfType<TableRow>().ToArray();
         foreach (var row in rows)
         {
-            if (row == titleRow && row.GetCellContents(1) is Label titleLabel)
+            if (row.Name.StartsWith("Section") && row.GetCellContents(1) is Label titleLabel)
             {
                 titleLabel.Padding = titleLabel.Padding with { Top = 8 };
             }

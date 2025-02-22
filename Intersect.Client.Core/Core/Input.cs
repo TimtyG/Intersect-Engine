@@ -1,6 +1,4 @@
-using System.Diagnostics;
 using Intersect.Admin.Actions;
-using Intersect.Client.Core.Controls;
 using Intersect.Client.Entities;
 using Intersect.Client.Framework.GenericClasses;
 using Intersect.Client.Framework.Graphics;
@@ -13,7 +11,7 @@ using Intersect.Client.Maps;
 using Intersect.Client.Networking;
 using Intersect.Configuration;
 using Intersect.Enums;
-using Intersect.Utilities;
+using Intersect.Framework.Core;
 
 namespace Intersect.Client.Core;
 
@@ -121,10 +119,12 @@ public static partial class Input
                 return;
             }
 
-            if (Interface.Interface.GameUi is not { } gameUi)
+            if (!Interface.Interface.HasInGameUI)
             {
                 return;
             }
+
+            var gameUi = Interface.Interface.GameUi;
 
             // First try and unfocus chat then close all UI elements, then untarget our target.. and THEN open the escape menu.
             // Most games do this, why not this?
@@ -146,7 +146,7 @@ public static partial class Input
 
                 if (simplifiedEscapeMenuSetting)
                 {
-                    if (gameUi.EscapeMenu.IsVisible)
+                    if (gameUi.EscapeMenu.IsVisibleInTree)
                     {
                         gameUi.EscapeMenu.ToggleHidden();
                     }
@@ -217,7 +217,7 @@ public static partial class Input
                 }
 
                 case Control.OpenDebugger:
-                    _ = MutableInterface.ToggleDebug();
+                    Interface.Interface.CurrentInterface.ToggleDebug();
                     break;
             }
 
@@ -246,6 +246,11 @@ public static partial class Input
                     break;
 
                 case GameStates.InGame:
+                    if (!Interface.Interface.HasInGameUI)
+                    {
+                        break;
+                    }
+
                     switch (control)
                     {
                         case Control.Block:
@@ -275,7 +280,7 @@ public static partial class Input
                             break;
 
                         case Control.Enter:
-                            if (canFocusChat && Interface.Interface.GameUi != default)
+                            if (canFocusChat)
                             {
                                 Interface.Interface.GameUi.FocusChat = true;
                                 consumeKey = true;
@@ -283,31 +288,31 @@ public static partial class Input
                             continue;
 
                         case Control.OpenInventory:
-                            Interface.Interface.GameUi?.GameMenu?.ToggleInventoryWindow();
+                            Interface.Interface.GameUi.GameMenu?.ToggleInventoryWindow();
                             break;
 
                         case Control.OpenQuests:
-                            Interface.Interface.GameUi?.GameMenu?.ToggleQuestsWindow();
+                            Interface.Interface.GameUi.GameMenu?.ToggleQuestsWindow();
                             break;
 
                         case Control.OpenCharacterInfo:
-                            Interface.Interface.GameUi?.GameMenu?.ToggleCharacterWindow();
+                            Interface.Interface.GameUi.GameMenu?.ToggleCharacterWindow();
                             break;
 
                         case Control.OpenParties:
-                            Interface.Interface.GameUi?.GameMenu?.TogglePartyWindow();
+                            Interface.Interface.GameUi.GameMenu?.TogglePartyWindow();
                             break;
 
                         case Control.OpenSpells:
-                            Interface.Interface.GameUi?.GameMenu?.ToggleSpellsWindow();
+                            Interface.Interface.GameUi.GameMenu?.ToggleSpellsWindow();
                             break;
 
                         case Control.OpenFriends:
-                            _ = (Interface.Interface.GameUi?.GameMenu?.ToggleFriendsWindow());
+                            _ = (Interface.Interface.GameUi.GameMenu?.ToggleFriendsWindow());
                             break;
 
                         case Control.OpenSettings:
-                            Interface.Interface.GameUi?.EscapeMenu?.OpenSettingsWindow();
+                            Interface.Interface.GameUi.EscapeMenu?.OpenSettingsWindow();
                             break;
 
                         case Control.OpenAdminPanel:
@@ -315,7 +320,7 @@ public static partial class Input
                             break;
 
                         case Control.OpenGuild:
-                            _ = Interface.Interface.GameUi?.GameMenu?.ToggleGuildWindow();
+                            _ = Interface.Interface.GameUi.GameMenu?.ToggleGuildWindow();
                             break;
                     }
                     break;
