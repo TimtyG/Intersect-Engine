@@ -11,7 +11,6 @@ using Intersect.Client.Interface.Game.DescriptionWindows;
 using Intersect.Client.Interface.Game.Inventory;
 using Intersect.Client.Localization;
 using Intersect.Client.Networking;
-using Intersect.Collections.Slotting;
 using Intersect.Configuration;
 using Intersect.Framework.Core;
 using Intersect.Framework.Core.GameObjects.Items;
@@ -40,7 +39,8 @@ public partial class BagItem : SlotItem
     // Context Menu Handling
     private readonly MenuItem _withdrawContextItem;
 
-    public BagItem(BagWindow bagWindow, Base parent, int index, ContextMenu contextMenu) : base(parent, nameof(BagItem), index, contextMenu)
+    public BagItem(BagWindow bagWindow, Base parent, int index, ContextMenu contextMenu)
+        : base(parent, nameof(BagItem), index, contextMenu)
     {
         _bagWindow = bagWindow;
         TextureFilename = "bagitem.png";
@@ -61,15 +61,15 @@ public partial class BagItem : SlotItem
 
         LoadJsonUi(GameContentManager.UI.InGame, Graphics.Renderer.GetResolutionString());
 
-        _contextMenu.ClearChildren();
-        _withdrawContextItem = _contextMenu.AddItem(Strings.BagContextMenu.Withdraw);
+        contextMenu.ClearChildren();
+        _withdrawContextItem = contextMenu.AddItem(Strings.BagContextMenu.Withdraw);
         _withdrawContextItem.Clicked += _withdrawMenuItem_Clicked;
-        _contextMenu.LoadJsonUi(GameContentManager.UI.InGame, Graphics.Renderer.GetResolutionString());
+        contextMenu.LoadJsonUi(GameContentManager.UI.InGame, Graphics.Renderer.GetResolutionString());
     }
 
     #region Context Menu
 
-    public override void OpenContextMenu()
+    protected override void OnContextMenuOpening(ContextMenu contextMenu)
     {
         if (Globals.BagSlots is not { Length: > 0 } bagSlots)
         {
@@ -81,8 +81,11 @@ public partial class BagItem : SlotItem
             return;
         }
 
+        // Clear the context menu and add the withdraw item with updated item name
+        contextMenu.ClearChildren();
         _withdrawContextItem.SetText(Strings.BagContextMenu.Withdraw.ToString(item.Name));
-        base.OpenContextMenu();
+        contextMenu.AddChild(_withdrawContextItem);
+        base.OnContextMenuOpening(contextMenu);
     }
 
     private void _withdrawMenuItem_Clicked(Base sender, MouseButtonState arguments)

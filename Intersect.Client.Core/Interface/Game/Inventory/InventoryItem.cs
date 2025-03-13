@@ -9,6 +9,7 @@ using Intersect.Client.Framework.Gwen.Input;
 using Intersect.Client.Framework.Input;
 using Intersect.Client.General;
 using Intersect.Client.Interface.Game.Bag;
+using Intersect.Client.Interface.Game.Bank;
 using Intersect.Client.Interface.Game.DescriptionWindows;
 using Intersect.Client.Localization;
 using Intersect.Client.Networking;
@@ -47,7 +48,8 @@ public partial class InventoryItem : SlotItem
     private readonly MenuItem _actionItemMenuItem;
     private readonly MenuItem _dropItemMenuItem;
 
-    public InventoryItem(InventoryWindow inventoryWindow, Base parent, int index, ContextMenu contextMenu) : base(parent, nameof(InventoryItem), index, contextMenu)
+    public InventoryItem(InventoryWindow inventoryWindow, Base parent, int index, ContextMenu contextMenu)
+        : base(parent, nameof(InventoryItem), index, contextMenu)
     {
         _inventoryWindow = inventoryWindow;
         TextureFilename = "inventoryitem.png";
@@ -96,14 +98,14 @@ public partial class InventoryItem : SlotItem
 
         LoadJsonUi(GameContentManager.UI.InGame, Graphics.Renderer.GetResolutionString());
 
-        _contextMenu.ClearChildren();
-        _useItemMenuItem = _contextMenu.AddItem(Strings.ItemContextMenu.Use);
+        contextMenu.ClearChildren();
+        _useItemMenuItem = contextMenu.AddItem(Strings.ItemContextMenu.Use);
         _useItemMenuItem.Clicked += _useItemContextItem_Clicked;
-        _dropItemMenuItem = _contextMenu.AddItem(Strings.ItemContextMenu.Drop);
+        _dropItemMenuItem = contextMenu.AddItem(Strings.ItemContextMenu.Drop);
         _dropItemMenuItem.Clicked += _dropItemContextItem_Clicked;
-        _actionItemMenuItem = _contextMenu.AddItem(Strings.ItemContextMenu.Bank);
+        _actionItemMenuItem = contextMenu.AddItem(Strings.ItemContextMenu.Bank);
         _actionItemMenuItem.Clicked += _actionItemContextItem_Clicked;
-        _contextMenu.LoadJsonUi(GameContentManager.UI.InGame, Graphics.Renderer.GetResolutionString());
+        contextMenu.LoadJsonUi(GameContentManager.UI.InGame, Graphics.Renderer.GetResolutionString());
 
         if (Globals.Me is { } player)
         {
@@ -113,10 +115,10 @@ public partial class InventoryItem : SlotItem
 
     #region Context Menu
 
-    public override void OpenContextMenu()
+    protected override void OnContextMenuOpening(ContextMenu contextMenu)
     {
         // Clear out the old options since we might not show all of them
-        _contextMenu.ClearChildren();
+        contextMenu.ClearChildren();
 
         if (Globals.Me?.Inventory[SlotIndex] is not { } inventorySlot)
         {
@@ -133,24 +135,24 @@ public partial class InventoryItem : SlotItem
         switch (descriptor.ItemType)
         {
             case ItemType.Spell:
-                _contextMenu.AddChild(_useItemMenuItem);
+                contextMenu.AddChild(_useItemMenuItem);
                 var useItemLabel = descriptor.QuickCast ? Strings.ItemContextMenu.Cast : Strings.ItemContextMenu.Learn;
                 _useItemMenuItem.Text = useItemLabel.ToString(descriptor.Name);
                 break;
 
             case ItemType.Event:
             case ItemType.Consumable:
-                _contextMenu.AddChild(_useItemMenuItem);
+                contextMenu.AddChild(_useItemMenuItem);
                 _useItemMenuItem.Text = Strings.ItemContextMenu.Use.ToString(descriptor.Name);
                 break;
 
             case ItemType.Bag:
-                _contextMenu.AddChild(_useItemMenuItem);
+                contextMenu.AddChild(_useItemMenuItem);
                 _useItemMenuItem.Text = Strings.ItemContextMenu.Open.ToString(descriptor.Name);
                 break;
 
             case ItemType.Equipment:
-                _contextMenu.AddChild(_useItemMenuItem);
+                contextMenu.AddChild(_useItemMenuItem);
                 var equipItemLabel = Globals.Me.MyEquipment.Contains(SlotIndex) ? Strings.ItemContextMenu.Unequip : Strings.ItemContextMenu.Equip;
                 _useItemMenuItem.Text = equipItemLabel.ToString(descriptor.Name);
                 break;
@@ -159,33 +161,33 @@ public partial class InventoryItem : SlotItem
         // Set up the correct contextual additional action.
         if (Globals.InBag && descriptor.CanBag)
         {
-            _contextMenu.AddChild(_actionItemMenuItem);
+            contextMenu.AddChild(_actionItemMenuItem);
             _actionItemMenuItem.SetText(Strings.ItemContextMenu.Bag.ToString(descriptor.Name));
         }
         else if (Globals.InBank && (descriptor.CanBank || descriptor.CanGuildBank))
         {
-            _contextMenu.AddChild(_actionItemMenuItem);
+            contextMenu.AddChild(_actionItemMenuItem);
             _actionItemMenuItem.SetText(Strings.ItemContextMenu.Bank.ToString(descriptor.Name));
         }
         else if (Globals.InTrade && descriptor.CanTrade)
         {
-            _contextMenu.AddChild(_actionItemMenuItem);
+            contextMenu.AddChild(_actionItemMenuItem);
             _actionItemMenuItem.SetText(Strings.ItemContextMenu.Trade.ToString(descriptor.Name));
         }
         else if (Globals.GameShop != null && descriptor.CanSell)
         {
-            _contextMenu.AddChild(_actionItemMenuItem);
+            contextMenu.AddChild(_actionItemMenuItem);
             _actionItemMenuItem.SetText(Strings.ItemContextMenu.Sell.ToString(descriptor.Name));
         }
 
         // Can we drop this item? if so show the user!
         if (descriptor.CanDrop)
         {
-            _contextMenu.AddChild(_dropItemMenuItem);
+            contextMenu.AddChild(_dropItemMenuItem);
             _dropItemMenuItem.SetText(Strings.ItemContextMenu.Drop.ToString(descriptor.Name));
         }
 
-        base.OpenContextMenu();
+        base.OnContextMenuOpening(contextMenu);
     }
 
     private void _useItemContextItem_Clicked(Base sender, MouseButtonState arguments)
@@ -696,7 +698,11 @@ public partial class InventoryItem : SlotItem
             }
             else if (Globals.InBank && Globals.BankSlots != default)
             {
-                var bankWindow = Interface.GameUi.GetBankWindow();
+                if (Interface.GameUi.GetBankWindow() is not BankWindow bankWindow)
+                {
+                    return;
+                }
+
                 if (bankWindow.RenderBounds().IntersectsWith(dragRect))
                 {
                     var bankSlotComponents = bankWindow.Items.ToArray();
@@ -707,7 +713,11 @@ public partial class InventoryItem : SlotItem
 
                     for (var bankSlotIndex = 0; bankSlotIndex < bankSlotLimit; bankSlotIndex++)
                     {
-                        var bankSlotComponent = bankSlotComponents[bankSlotIndex];
+                        if (bankSlotComponents[bankSlotIndex] is not BankItem bankSlotComponent)
+                        {
+                            continue;
+                        }
+
                         var bankSlotRenderBounds = bankSlotComponent.RenderBounds();
                         if (!bankSlotRenderBounds.IntersectsWith(dragRect))
                         {

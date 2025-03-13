@@ -219,6 +219,10 @@ jobs:
         path: |
           Intersect*/bin/Release/**/*
 
+    - name: Force cURL to use HTTP 1.1
+      run: |
+        alias curl="$(which curl) --http1.1"
+
     - name: Setup dotnet
       if: steps.cache-binaries.outputs.cache-hit != 'true' || inputs.forceBuild == true || inputs.forceRestore == true
       uses: actions/setup-dotnet@v4.1.0
@@ -403,7 +407,7 @@ jobs:
           token: ${{ secrets.INTERSECTBOT_ACCESS_TOKEN }}
 
       - name: Package artifacts
-        uses: AscensionGameDev/actions@cc2eb0e356546042e4dc7eca6788fd0b5a063b32
+        uses: AscensionGameDev/actions@7bc0d0221a73dfcd7620c5c151b31ee8815d95a0
         with:
           bundle: .github/bundles/*.json
           version: ${{ env.VERSION_PREFIX }}${{ env.VERSION_SUFFIX }}.${{ github.run_number }}+build.${{ github.sha }}
